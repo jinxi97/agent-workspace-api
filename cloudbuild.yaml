@@ -11,16 +11,27 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/agnet-workspace-api:latest']
 
-  # Step 4: Update GKE deployment to the new image
+  # Step 4: Restart deployment to pick up :latest image
   - name: 'gcr.io/cloud-builders/kubectl'
     args:
-      - 'set'
-      - 'image'
+      - 'rollout'
+      - 'restart'
       - 'deployment/agnet-workspace-api'
-      - 'agnet-workspace-api=gcr.io/$PROJECT_ID/agnet-workspace-api:$SHORT_SHA'
     env:
       - 'CLOUDSDK_COMPUTE_REGION=us-central1'
       - 'CLOUDSDK_CONTAINER_CLUSTER=agent-workspace-cluster'
+
+  # Step 5: Check deployment status
+  - name: 'gcr.io/cloud-builders/kubectl'
+    args:
+      - 'rollout'
+      - 'status'
+      - 'deployment/agnet-workspace-api'
+      - '--timeout=300s'
+    env:
+      - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+      - 'CLOUDSDK_CONTAINER_CLUSTER=agent-workspace-cluster'
+
 
 options:
   logging: CLOUD_LOGGING_ONLY
