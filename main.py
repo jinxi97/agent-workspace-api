@@ -12,12 +12,12 @@ SANDBOX_TEMPLATE_NAME = os.getenv("SANDBOX_TEMPLATE_NAME", "python-runtime-templ
 SANDBOX_NAMESPACE = os.getenv("SANDBOX_NAMESPACE", "pod-snapshots-ns")
 SANDBOX_API_URL = os.getenv(
     "SANDBOX_API_URL",
-    "http://agent-sandbox-controller.agent-sandbox-system.svc.cluster.local:80",
+    "http://sandbox-router-svc.default.svc.cluster.local:8080",
 )
 
 @app.get("/")
 async def root():
-    return {"message": "Hello World!"}
+    return {"message": "Hello World!!"}
 
 
 @app.get("/healthz")
