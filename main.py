@@ -1,6 +1,13 @@
-def main():
-    print("Hello from agent-workspace-api!")
+from fastapi import FastAPI
+
+app = FastAPI()
 
 
-if __name__ == "__main__":
-    main()
+@app.get("/")
+async def root():
+    return {"message": "Hello World"}
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
