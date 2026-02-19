@@ -19,7 +19,7 @@ steps:
       - 'deployment/agnet-workspace-api'
       - 'agnet-workspace-api=gcr.io/$PROJECT_ID/agnet-workspace-api:$SHORT_SHA'
     env:
-      - 'CLOUDSDK_COMPUTE_ZONE=us-central1'
+      - 'CLOUDSDK_COMPUTE_REGION=us-central1'
       - 'CLOUDSDK_CONTAINER_CLUSTER=agent-workspace-cluster'
 
 options:
