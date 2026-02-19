@@ -69,3 +69,28 @@ When `EXTERNAL-IP` is assigned:
 curl http://EXTERNAL_IP/
 curl http://EXTERNAL_IP/healthz
 ```
+
+## Sandbox file listing endpoint (internal mode)
+
+This app includes:
+
+```text
+GET /sandbox/files?path=.&max_depth=2
+```
+
+It uses internal mode with `api_url` for the sandbox client, based on:
+[agentic-sandbox-client Python example](https://github.com/kubernetes-sigs/agent-sandbox/tree/main/clients/python/agentic-sandbox-client).
+
+Set these env vars if needed:
+
+```bash
+export SANDBOX_TEMPLATE_NAME="python-runtime-template"
+export SANDBOX_NAMESPACE="default"
+export SANDBOX_API_URL="http://sandbox-controller-manager-controller-manager.sandbox-system.svc.cluster.local:8080"
+```
+
+Example:
+
+```bash
+curl "http://localhost:8080/sandbox/files?path=.&max_depth=2"
+```

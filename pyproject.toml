@@ -5,5 +5,9 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "agentic-sandbox",
     "fastapi[standard]>=0.129.0",
 ]
+
+[tool.uv.sources]
+agentic-sandbox = { git = "https://github.com/kubernetes-sigs/agent-sandbox.git", subdirectory = "clients/python/agentic-sandbox-client", rev = "v0.1.1" }
