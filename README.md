@@ -94,3 +94,30 @@ Example:
 ```bash
 curl "http://localhost:8080/sandbox/files?path=.&max_depth=2"
 ```
+
+## Create pod snapshot trigger endpoint
+
+This app includes:
+
+```text
+POST /snapshots/triggers
+```
+
+Defaults:
+
+```bash
+export SNAPSHOT_NAMESPACE="pod-snapshots-ns"
+```
+
+Request example:
+
+```bash
+curl -X POST "http://localhost:8080/snapshots/triggers" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workspace_id": "REPLACE_WITH_WORKSPACE_ID"
+  }'
+```
+
+Optional fields:
+- None. This endpoint now only accepts `workspace_id`.
