@@ -121,3 +121,21 @@ curl -X POST "http://localhost:8080/snapshots/triggers" \
 
 Optional fields:
 - None. This endpoint now only accepts `workspace_id`.
+
+## Check snapshot status endpoint
+
+This app includes:
+
+```text
+GET /snapshots/status?trigger_name=<trigger-name>
+```
+
+Examples:
+
+```bash
+curl "http://localhost:8080/snapshots/status?trigger_name=python-sandbox-warmpool-abc-snapshot-1234"
+```
+
+Response includes:
+- `ready`: boolean for restore readiness
+- `snapshot_name`: created snapshot name (or `null` if not available yet)

@@ -33,6 +33,19 @@ class SnapshotTriggerRequest(BaseModel):
     )
 
 
+def _is_snapshot_ready(snapshot: dict) -> bool:
+    status = snapshot.get("status", {})
+    if status.get("phase") == "AllSnapshotsAvailable":
+        return True
+    conditions = status.get("conditions", [])
+    for cond in conditions:
+        cond_type = cond.get("type")
+        cond_status = cond.get("status")
+        if cond_type in {"Ready", "Available"} and cond_status == "True":
+            return True
+    return False
+
+
 def _get_k8s_custom_api() -> client.CustomObjectsApi:
     try:
         config.load_incluster_config()
@@ -135,4 +148,53 @@ def create_snapshot_trigger(req: SnapshotTriggerRequest):
         "target_pod": created.get("spec", {}).get("targetPod", target_pod),
         "api_version": created.get("apiVersion", "podsnapshot.gke.io/v1alpha1"),
         "kind": created.get("kind", "PodSnapshotManualTrigger"),
+    }
+
+
+@app.get("/snapshots/status")
+def get_snapshot_status(
+    trigger_name: str,
+):
+    api = _get_k8s_custom_api()
+    try:
+        trigger = api.get_namespaced_custom_object(
+            group="podsnapshot.gke.io",
+            version="v1alpha1",
+            namespace=SNAPSHOT_NAMESPACE,
+            plural="podsnapshotmanualtriggers",
+            name=trigger_name,
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            raise HTTPException(status_code=404, detail=f"Trigger not found: {trigger_name}") from exc
+        raise HTTPException(status_code=500, detail=exc.body or str(exc)) from exc
+
+    trigger_status = trigger.get("status", {})
+    snapshot_created = trigger_status.get("snapshotCreated")
+    snapshot_name = snapshot_created.get("name")
+    if not snapshot_name:
+        return {
+            "ready": False,
+            "snapshot_name": None,
+        }
+
+    try:
+        snapshot = api.get_namespaced_custom_object(
+            group="podsnapshot.gke.io",
+            version="v1alpha1",
+            namespace=SNAPSHOT_NAMESPACE,
+            plural="podsnapshots",
+            name=snapshot_name,
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            return {
+                "ready": False,
+                "snapshot_name": snapshot_name,
+            }
+        raise HTTPException(status_code=500, detail=exc.body or str(exc)) from exc
+
+    return {
+        "ready": _is_snapshot_ready(snapshot),
+        "snapshot_name": snapshot_name,
     }
