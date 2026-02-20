@@ -25,12 +25,12 @@ async def healthz():
     return {"status": "ok"}
 
 
-@app.get("/echo")
-async def echo(message: str):
+@app.get("/run")
+async def run_command(command: str):
     with SandboxClient(
         template_name=SANDBOX_TEMPLATE_NAME,
         namespace=SANDBOX_NAMESPACE,
         api_url=SANDBOX_API_URL,
     ) as sandbox:
-        result = sandbox.run(f"echo {message}")
+        result = sandbox.run(command)
         return result.stdout
