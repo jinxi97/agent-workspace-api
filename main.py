@@ -181,6 +181,25 @@ def create_snapshot_trigger(req: SnapshotTriggerRequest):
     }
 
 
+@app.delete("/snapshots/triggers/{trigger_name}")
+def delete_snapshot_trigger(trigger_name: str):
+    api = _get_k8s_custom_api()
+    try:
+        api.delete_namespaced_custom_object(
+            group="podsnapshot.gke.io",
+            version="v1alpha1",
+            namespace=SNAPSHOT_NAMESPACE,
+            plural="podsnapshotmanualtriggers",
+            name=trigger_name,
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            raise HTTPException(status_code=404, detail=f"Trigger not found: {trigger_name}") from exc
+        raise HTTPException(status_code=500, detail=exc.body or str(exc)) from exc
+
+    return {"deleted": True}
+
+
 @app.get("/snapshots/status")
 def get_snapshot_status(
     trigger_name: str,

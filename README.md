@@ -122,6 +122,12 @@ curl -X POST "http://localhost:8080/snapshots/triggers" \
 Optional fields:
 - None. This endpoint now only accepts `workspace_id`.
 
+Delete trigger:
+
+```bash
+curl -X DELETE "http://localhost:8080/snapshots/triggers/<trigger_name>"
+```
+
 ## Check snapshot status endpoint
 
 This app includes:
