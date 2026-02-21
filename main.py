@@ -33,6 +33,14 @@ class SnapshotTriggerRequest(BaseModel):
     )
 
 
+class SnapshotRestoreRequest(BaseModel):
+    snapshot_name: str = Field(
+        ...,
+        min_length=1,
+        description="Exact PodSnapshot name to restore from",
+    )
+
+
 def _is_snapshot_ready(snapshot: dict) -> bool:
     status = snapshot.get("status", {})
     if status.get("phase") == "AllSnapshotsAvailable":
@@ -44,6 +52,28 @@ def _is_snapshot_ready(snapshot: dict) -> bool:
         if cond_type in {"Ready", "Available"} and cond_status == "True":
             return True
     return False
+
+
+def _get_ready_snapshot_or_400(api: client.CustomObjectsApi, snapshot_name: str) -> dict:
+    try:
+        snapshot = api.get_namespaced_custom_object(
+            group="podsnapshot.gke.io",
+            version="v1alpha1",
+            namespace=SNAPSHOT_NAMESPACE,
+            plural="podsnapshots",
+            name=snapshot_name,
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            raise HTTPException(status_code=400, detail=f"Invalid snapshot_name: {snapshot_name}") from exc
+        raise HTTPException(status_code=500, detail=exc.body or str(exc)) from exc
+
+    if not _is_snapshot_ready(snapshot):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Snapshot is not ready for restore: {snapshot_name}",
+        )
+    return snapshot
 
 
 def _get_k8s_custom_api() -> client.CustomObjectsApi:
@@ -198,3 +228,61 @@ def get_snapshot_status(
         "ready": _is_snapshot_ready(snapshot),
         "snapshot_name": snapshot_name,
     }
+
+
+@app.post("/snapshots/restore")
+def restore_from_snapshot(req: SnapshotRestoreRequest):
+    api = _get_k8s_custom_api()
+    _get_ready_snapshot_or_400(api, req.snapshot_name)
+
+    claim_name = f"restore-{req.snapshot_name[:20]}-{uuid.uuid4().hex[:8]}"
+    body = {
+        "apiVersion": "extensions.agents.x-k8s.io/v1alpha1",
+        "kind": "SandboxClaim",
+        "metadata": {
+            "name": claim_name,
+            "namespace": SNAPSHOT_NAMESPACE,
+            "labels": {
+                "app": "agent-sandbox-workload",
+            },
+            "annotations": {
+                "podsnapshot.gke.io/ps-name": req.snapshot_name,
+            },
+        },
+        "spec": {
+            "sandboxTemplateRef": {
+                "name": SANDBOX_TEMPLATE_NAME,
+            },
+        },
+    }
+
+    try:
+        created = api.create_namespaced_custom_object(
+            group="extensions.agents.x-k8s.io",
+            version="v1alpha1",
+            namespace=SNAPSHOT_NAMESPACE,
+            plural="sandboxclaims",
+            body=body,
+        )
+    except ApiException as exc:
+        detail = exc.body or str(exc)
+        if exc.status == 409:
+            raise HTTPException(status_code=409, detail=f"sandboxclaim already exists: {claim_name}") from exc
+        raise HTTPException(status_code=500, detail=f"failed to create sandboxclaim: {detail}") from exc
+
+    # Attach a workspace handle to the restored claim so callers can execute commands.
+    sandbox = SandboxClient(
+        template_name=SANDBOX_TEMPLATE_NAME,
+        namespace=SNAPSHOT_NAMESPACE,
+        api_url=SANDBOX_API_URL,
+    )
+    sandbox.claim_name = claim_name
+    try:
+        sandbox._wait_for_sandbox_ready()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"restore claim created but sandbox not ready: {exc}") from exc
+
+    workspace_id = str(uuid.uuid4())
+    workspaces[workspace_id] = sandbox
+
+    return {"workspace_id": workspace_id}

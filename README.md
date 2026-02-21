@@ -139,3 +139,30 @@ curl "http://localhost:8080/snapshots/status?trigger_name=python-sandbox-warmpoo
 Response includes:
 - `ready`: boolean for restore readiness
 - `snapshot_name`: created snapshot name (or `null` if not available yet)
+
+## Restore sandbox from snapshot endpoint
+
+This app includes:
+
+```text
+POST /snapshots/restore
+```
+
+Request example:
+
+```bash
+curl -X POST "http://localhost:8080/snapshots/restore" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "snapshot_name": "fbe843d5-0165-49b2-8fa8-409de21f5354"
+  }'
+```
+
+This creates a `SandboxClaim` in `SNAPSHOT_NAMESPACE` with:
+- label `app=agent-sandbox-workload`
+- annotation `podsnapshot.gke.io/ps-name=<snapshot_name>`
+- `spec.sandboxTemplateRef.name=${SANDBOX_TEMPLATE_NAME}`
+
+On success, it returns only `workspace_id`, which can be used with:
+- `POST /workspaces/{workspace_id}/exec`
+- `DELETE /workspaces/{workspace_id}`
