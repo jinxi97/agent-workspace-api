@@ -85,8 +85,8 @@ Set these env vars if needed:
 
 ```bash
 export SANDBOX_TEMPLATE_NAME="python-runtime-template"
-export SANDBOX_NAMESPACE="default"
-export SANDBOX_API_URL="http://sandbox-controller-manager-controller-manager.sandbox-system.svc.cluster.local:8080"
+export SANDBOX_NAMESPACE="pod-snapshots-ns"
+export SANDBOX_API_URL="http://sandbox-router-svc.agent-sandbox-application.svc.cluster.local:8080"
 ```
 
 Example:

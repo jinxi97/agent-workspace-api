@@ -13,11 +13,12 @@ SANDBOX_TEMPLATE_NAME = os.getenv("SANDBOX_TEMPLATE_NAME", "python-runtime-templ
 SANDBOX_NAMESPACE = os.getenv("SANDBOX_NAMESPACE", "pod-snapshots-ns")
 SANDBOX_API_URL = os.getenv(
     "SANDBOX_API_URL",
-    "http://sandbox-router-svc.default.svc.cluster.local:8080",
+    "http://sandbox-router-svc.agent-sandbox-application.svc.cluster.local:8080",
 )
 
 # Local sandbox API URL for development
-# Remember to run 'kubectl -n default port-forward svc/sandbox-router-svc 8080:8080' before running the application
+# Remember to run 'kubectl -n agent-sandbox-application port-forward svc/sandbox-router-svc 8080:8080'
+# before running the application
 LOCAL_SANDBOX_API_URL = "http://127.0.0.1:8080"
 SNAPSHOT_NAMESPACE = os.getenv("SNAPSHOT_NAMESPACE", SANDBOX_NAMESPACE)
 
