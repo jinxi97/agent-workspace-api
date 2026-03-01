@@ -1,22 +1,24 @@
 steps:
   # Step 1: Build the container image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/agnet-workspace-api:$SHORT_SHA', '-t', 'gcr.io/$PROJECT_ID/agnet-workspace-api:latest', '.']
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/agent-workspace-api:$SHORT_SHA', '-t', 'gcr.io/$PROJECT_ID/agent-workspace-api:latest', '.']
 
   # Step 2: Push the image with commit SHA tag
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/agnet-workspace-api:$SHORT_SHA']
+    args: ['push', 'gcr.io/$PROJECT_ID/agent-workspace-api:$SHORT_SHA']
 
   # Step 3: Push the latest image tag
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/agnet-workspace-api:latest']
+    args: ['push', 'gcr.io/$PROJECT_ID/agent-workspace-api:latest']
 
   # Step 4: Restart deployment to pick up :latest image
   - name: 'gcr.io/cloud-builders/kubectl'
     args:
       - 'rollout'
       - 'restart'
-      - 'deployment/agnet-workspace-api'
+      - 'deployment/agent-workspace-api'
+      - '-n'
+      - 'agent-sandbox-application'
     env:
       - 'CLOUDSDK_COMPUTE_REGION=us-central1'
       - 'CLOUDSDK_CONTAINER_CLUSTER=agent-workspace-cluster'
@@ -26,7 +28,9 @@ steps:
     args:
       - 'rollout'
       - 'status'
-      - 'deployment/agnet-workspace-api'
+      - 'deployment/agent-workspace-api'
+      - '-n'
+      - 'agent-sandbox-application'
       - '--timeout=300s'
     env:
       - 'CLOUDSDK_COMPUTE_REGION=us-central1'
@@ -37,5 +41,5 @@ options:
   logging: CLOUD_LOGGING_ONLY
 
 images:
-  - 'gcr.io/$PROJECT_ID/agnet-workspace-api:$SHORT_SHA'
-  - 'gcr.io/$PROJECT_ID/agnet-workspace-api:latest'
+  - 'gcr.io/$PROJECT_ID/agent-workspace-api:$SHORT_SHA'
+  - 'gcr.io/$PROJECT_ID/agent-workspace-api:latest'
