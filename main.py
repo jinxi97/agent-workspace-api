@@ -116,7 +116,7 @@ class ExecuteRequest(BaseModel):
     workspace_id: str
     command: str
 
-@app.post("/workspaces/{workspace_id}/exec")
+@app.post("/execute")
 def exec_command(req: ExecuteRequest):
     sandbox = workspaces.get(req.workspace_id)
     if not sandbox:
