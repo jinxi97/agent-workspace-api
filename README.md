@@ -14,6 +14,35 @@ curl http://localhost:8080/
 curl http://localhost:8080/healthz
 ```
 
+## API key protection
+
+All endpoints are protected by API key authentication except these default paths:
+- `/healthz`
+- `/docs`
+- `/openapi.json`
+- `/redoc`
+
+Configure API keys:
+
+```bash
+export API_KEY_HEADER="X-API-Key"
+export API_KEYS="dev-key-1,dev-key-2"
+export API_KEY_EXEMPT_PATHS="/healthz,/docs,/openapi.json,/redoc"
+```
+
+Use the key in requests:
+
+```bash
+curl http://localhost:8080/ \
+  -H "X-API-Key: dev-key-1"
+```
+
+For all protected endpoint examples below, add:
+
+```bash
+-H "X-API-Key: dev-key-1"
+```
+
 ## 2) Push image to Artifact Registry
 
 Set variables:

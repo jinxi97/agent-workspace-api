@@ -1,7 +1,8 @@
 import os
 import uuid
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from agentic_sandbox import SandboxClient
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
@@ -21,6 +22,20 @@ SANDBOX_API_URL = os.getenv(
 # before running the application
 LOCAL_SANDBOX_API_URL = "http://127.0.0.1:8080"
 SNAPSHOT_NAMESPACE = os.getenv("SNAPSHOT_NAMESPACE", SANDBOX_NAMESPACE)
+API_KEY_HEADER = os.getenv("API_KEY_HEADER", "X-API-Key")
+API_KEYS = {
+    key.strip()
+    for key in os.getenv("API_KEYS", "").split(",")
+    if key.strip()
+}
+API_KEY_EXEMPT_PATHS = {
+    path.strip()
+    for path in os.getenv(
+        "API_KEY_EXEMPT_PATHS",
+        "/healthz,/docs,/openapi.json,/redoc",
+    ).split(",")
+    if path.strip()
+}
 
 # Store active workspaces
 workspaces: dict[str, SandboxClient] = {}
@@ -83,6 +98,24 @@ def _get_k8s_custom_api() -> client.CustomObjectsApi:
     except config.ConfigException:
         config.load_kube_config()
     return client.CustomObjectsApi()
+
+
+@app.middleware("http")
+async def require_api_key(request: Request, call_next):
+    if request.method == "OPTIONS" or request.url.path in API_KEY_EXEMPT_PATHS:
+        return await call_next(request)
+
+    if not API_KEYS:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Server API key configuration is missing"},
+        )
+
+    provided_key = request.headers.get(API_KEY_HEADER)
+    if not provided_key or provided_key not in API_KEYS:
+        return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+
+    return await call_next(request)
 
 @app.get("/")
 async def root():
