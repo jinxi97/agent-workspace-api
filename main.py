@@ -111,13 +111,18 @@ def create_workspace():
     return {"workspace_id": workspace_id}
 
 
+class ExecuteRequest(BaseModel):
+    """Request model for the /execute endpoint."""
+    workspace_id: str
+    command: str
+
 @app.post("/workspaces/{workspace_id}/exec")
-def exec_command(workspace_id: str, command: str):
-    sandbox = workspaces.get(workspace_id)
+def exec_command(req: ExecuteRequest):
+    sandbox = workspaces.get(req.workspace_id)
     if not sandbox:
         raise HTTPException(404, "Workspace not found")
 
-    result = sandbox.run(command)
+    result = sandbox.run(req.command)
     return {
         "stdout": result.stdout,
         "stderr": result.stderr,
