@@ -28,14 +28,8 @@ API_KEYS = {
     for key in os.getenv("API_KEYS", "").split(",")
     if key.strip()
 }
-API_KEY_EXEMPT_PATHS = {
-    path.strip()
-    for path in os.getenv(
-        "API_KEY_EXEMPT_PATHS",
-        "/healthz,/docs,/openapi.json,/redoc",
-    ).split(",")
-    if path.strip()
-}
+# Static exemptions only (no env dependency). "*" means all paths are exempt.
+API_KEY_EXEMPT_PATHS = {"*"}
 
 # Store active workspaces
 workspaces: dict[str, SandboxClient] = {}
@@ -102,7 +96,11 @@ def _get_k8s_custom_api() -> client.CustomObjectsApi:
 
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
-    if request.method == "OPTIONS" or request.url.path in API_KEY_EXEMPT_PATHS:
+    if (
+        request.method == "OPTIONS"
+        or "*" in API_KEY_EXEMPT_PATHS
+        or request.url.path in API_KEY_EXEMPT_PATHS
+    ):
         return await call_next(request)
 
     if not API_KEYS:
