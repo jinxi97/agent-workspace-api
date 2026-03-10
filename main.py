@@ -2,7 +2,7 @@ import os
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from agentic_sandbox import SandboxClient
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 app = FastAPI()
 
 SANDBOX_TEMPLATE_NAME = os.getenv("SANDBOX_TEMPLATE_NAME", "python-runtime-template")
+CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME = os.getenv("CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME", "claude-agent-sandbox-template")
 SANDBOX_NAMESPACE = os.getenv("SANDBOX_NAMESPACE", "pod-snapshots-ns")
 SANDBOX_API_URL = os.getenv(
     "SANDBOX_API_URL",
@@ -125,6 +126,21 @@ async def healthz():
     return {"status": "ok"}
 
 
+@app.post("/agent-workspaces")
+def create_agent_workspace():
+    workspace_id = str(uuid.uuid4())
+    sandbox = SandboxClient(
+        template_name=CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME,
+        namespace=SANDBOX_NAMESPACE,
+        api_url=LOCAL_SANDBOX_API_URL,
+    )
+    sandbox.__enter__()
+
+    workspaces[workspace_id] = sandbox
+
+    return {"workspace_id": workspace_id}
+
+
 @app.post("/workspaces")
 def create_workspace():
     # Generate a unique workspace ID
@@ -132,7 +148,7 @@ def create_workspace():
     sandbox = SandboxClient(
         template_name=SANDBOX_TEMPLATE_NAME,
         namespace=SANDBOX_NAMESPACE,
-        api_url=SANDBOX_API_URL,
+        api_url=LOCAL_SANDBOX_API_URL,
     )
     sandbox.__enter__()  # Start the sandbox
 
@@ -147,6 +163,16 @@ class ExecuteRequest(BaseModel):
     workspace_id: str
     command: str
 
+
+class CreateChatRequest(BaseModel):
+    """Request model for the POST /workspaces/{workspace_id}/chats endpoint."""
+    title: str | None = Field(default=None, description="Optional chat title")
+
+
+class SendMessageRequest(BaseModel):
+    """Request model for the POST /workspaces/{workspace_id}/chats/{chat_id}/messages endpoint."""
+    content: str = Field(..., min_length=1, description="Message content to send")
+
 @app.post("/execute")
 def exec_command(req: ExecuteRequest):
     sandbox = workspaces.get(req.workspace_id)
@@ -159,6 +185,110 @@ def exec_command(req: ExecuteRequest):
         "stderr": result.stderr,
         "exit_code": result.exit_code
     }
+
+
+@app.post("/workspaces/{workspace_id}/chats", status_code=201)
+def create_chat(workspace_id: str, req: CreateChatRequest):
+    sandbox = workspaces.get(workspace_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    try:
+        response = sandbox._request("POST", "api/chats", json={"title": req.title})
+        response.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error communicating with sandbox: {exc}",
+        ) from exc
+
+    return response.json()
+
+
+@app.post("/workspaces/{workspace_id}/chats/{chat_id}/messages")
+def send_message(workspace_id: str, chat_id: str, req: SendMessageRequest):
+    sandbox = workspaces.get(workspace_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    try:
+        response = sandbox._request(
+            "POST",
+            f"api/chats/{chat_id}/messages",
+            json={"content": req.content},
+            stream=True,
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error communicating with sandbox: {exc}",
+        ) from exc
+
+    return StreamingResponse(
+        response.iter_content(chunk_size=None),
+        media_type="text/event-stream",
+    )
+
+
+@app.get("/workspaces/{workspace_id}/chats")
+def list_chats(workspace_id: str):
+    sandbox = workspaces.get(workspace_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    try:
+        response = sandbox._request("GET", "api/chats")
+        response.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error communicating with sandbox: {exc}") from exc
+
+    return response.json()
+
+
+@app.get("/workspaces/{workspace_id}/chats/{chat_id}")
+def get_chat(workspace_id: str, chat_id: str):
+    sandbox = workspaces.get(workspace_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    try:
+        response = sandbox._request("GET", f"api/chats/{chat_id}")
+        response.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error communicating with sandbox: {exc}") from exc
+
+    return response.json()
+
+
+@app.delete("/workspaces/{workspace_id}/chats/{chat_id}")
+def delete_chat(workspace_id: str, chat_id: str):
+    sandbox = workspaces.get(workspace_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    try:
+        response = sandbox._request("DELETE", f"api/chats/{chat_id}")
+        response.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error communicating with sandbox: {exc}") from exc
+
+    return response.json()
+
+
+@app.get("/workspaces/{workspace_id}/chats/{chat_id}/messages")
+def get_messages(workspace_id: str, chat_id: str):
+    sandbox = workspaces.get(workspace_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    try:
+        response = sandbox._request("GET", f"api/chats/{chat_id}/messages")
+        response.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error communicating with sandbox: {exc}") from exc
+
+    return response.json()
 
 
 @app.delete("/workspaces/{workspace_id}")
