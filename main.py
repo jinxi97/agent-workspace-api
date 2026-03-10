@@ -132,7 +132,7 @@ def create_agent_workspace():
     sandbox = SandboxClient(
         template_name=CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME,
         namespace=SANDBOX_NAMESPACE,
-        api_url=LOCAL_SANDBOX_API_URL,
+        api_url=SANDBOX_API_URL,
     )
     sandbox.__enter__()
 
@@ -148,7 +148,7 @@ def create_workspace():
     sandbox = SandboxClient(
         template_name=SANDBOX_TEMPLATE_NAME,
         namespace=SANDBOX_NAMESPACE,
-        api_url=LOCAL_SANDBOX_API_URL,
+        api_url=SANDBOX_API_URL,
     )
     sandbox.__enter__()  # Start the sandbox
 
