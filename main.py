@@ -1,12 +1,15 @@
 import os
 import uuid
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from agentic_sandbox import SandboxClient
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 from pydantic import BaseModel, Field
+
+load_dotenv()
 
 app = FastAPI()
 
@@ -18,10 +21,6 @@ SANDBOX_API_URL = os.getenv(
     "http://sandbox-router-svc.agent-sandbox-application.svc.cluster.local:8080",
 )
 
-# Local sandbox API URL for development
-# Remember to run 'kubectl -n agent-sandbox-application port-forward svc/sandbox-router-svc 8080:8080'
-# before running the application
-LOCAL_SANDBOX_API_URL = "http://127.0.0.1:8080"
 SNAPSHOT_NAMESPACE = os.getenv("SNAPSHOT_NAMESPACE", SANDBOX_NAMESPACE)
 API_KEY_HEADER = os.getenv("API_KEY_HEADER", "X-API-Key")
 API_KEYS = {
@@ -289,6 +288,37 @@ def get_messages(workspace_id: str, chat_id: str):
         raise HTTPException(status_code=500, detail=f"Error communicating with sandbox: {exc}") from exc
 
     return response.json()
+
+
+@app.get("/workspaces/{workspace_id}/artifacts")
+def get_artifacts(workspace_id: str):
+    sandbox = workspaces.get(workspace_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    try:
+        response = sandbox._request("GET", "api/artifacts")
+        response.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error communicating with sandbox: {exc}") from exc
+
+    return response.json()
+
+
+@app.get("/workspaces/{workspace_id}/artifacts/file/{filename:path}")
+def serve_artifact_file(workspace_id: str, filename: str):
+    sandbox = workspaces.get(workspace_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    try:
+        response = sandbox._request("GET", f"api/artifacts/file/{filename}", stream=True)
+        response.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error communicating with sandbox: {exc}") from exc
+
+    media_type = response.headers.get("content-type", "text/html")
+    return StreamingResponse(response.iter_content(chunk_size=None), media_type=media_type)
 
 
 @app.delete("/workspaces/{workspace_id}")
