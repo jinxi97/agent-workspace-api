@@ -1,5 +1,6 @@
 import os
 import uuid
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
@@ -322,14 +323,14 @@ def get_messages(workspace_id: str, chat_id: str):
     return response.json()
 
 
-@app.get("/workspaces/{workspace_id}/artifacts")
-def get_artifacts(workspace_id: str):
+@app.get("/workspaces/{workspace_id}/chats/{chat_id}/artifacts")
+def list_chat_artifacts(workspace_id: str, chat_id: str):
     sandbox = workspaces.get(workspace_id)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
     try:
-        response = sandbox._request("GET", "api/artifacts")
+        response = sandbox._request("GET", f"api/chats/{chat_id}/artifacts")
         response.raise_for_status()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error communicating with sandbox: {exc}") from exc
@@ -337,20 +338,30 @@ def get_artifacts(workspace_id: str):
     return response.json()
 
 
-@app.get("/workspaces/{workspace_id}/artifacts/file/{filename:path}")
-def serve_artifact_file(workspace_id: str, filename: str):
+@app.get("/workspaces/{workspace_id}/files/download/{file_path:path}")
+def download_workspace_file(workspace_id: str, file_path: str):
     sandbox = workspaces.get(workspace_id)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
     try:
-        response = sandbox._request("GET", f"api/artifacts/file/{filename}", stream=True)
+        encoded_path = quote(file_path, safe="/")
+        response = sandbox._request("GET", f"api/files/download/{encoded_path}", stream=True)
         response.raise_for_status()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error communicating with sandbox: {exc}") from exc
 
-    media_type = response.headers.get("content-type", "text/html")
-    return StreamingResponse(response.iter_content(chunk_size=None), media_type=media_type)
+    headers = {}
+    for header in ("content-disposition", "content-length", "last-modified", "etag"):
+        value = response.headers.get(header)
+        if value:
+            headers[header] = value
+
+    return StreamingResponse(
+        response.iter_content(chunk_size=None),
+        media_type=response.headers.get("content-type", "application/octet-stream"),
+        headers=headers,
+    )
 
 
 @app.delete("/workspaces/{workspace_id}")
