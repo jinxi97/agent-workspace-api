@@ -3,6 +3,7 @@ import uuid
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from agentic_sandbox import SandboxClient
 from kubernetes import client, config
@@ -12,6 +13,13 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 SANDBOX_TEMPLATE_NAME = os.getenv("SANDBOX_TEMPLATE_NAME", "python-runtime-template")
 CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME = os.getenv("CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME", "claude-agent-sandbox-template")
@@ -172,6 +180,11 @@ class SendMessageRequest(BaseModel):
     """Request model for the POST /workspaces/{workspace_id}/chats/{chat_id}/messages endpoint."""
     content: str = Field(..., min_length=1, description="Message content to send")
 
+
+class AnswerRequest(BaseModel):
+    """Request model for the POST /workspaces/{workspace_id}/chats/{chat_id}/answer endpoint."""
+    answers: dict[str, str] = Field(..., description="Question text → selected option label")
+
 @app.post("/execute")
 def exec_command(req: ExecuteRequest):
     sandbox = workspaces.get(req.workspace_id)
@@ -228,6 +241,25 @@ def send_message(workspace_id: str, chat_id: str, req: SendMessageRequest):
         response.iter_content(chunk_size=None),
         media_type="text/event-stream",
     )
+
+
+@app.post("/workspaces/{workspace_id}/chats/{chat_id}/answer")
+def answer_question(workspace_id: str, chat_id: str, req: AnswerRequest):
+    sandbox = workspaces.get(workspace_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    try:
+        response = sandbox._request(
+            "POST",
+            f"api/chats/{chat_id}/answer",
+            json={"answers": req.answers},
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error communicating with sandbox: {exc}") from exc
+
+    return response.json()
 
 
 @app.get("/workspaces/{workspace_id}/chats")
