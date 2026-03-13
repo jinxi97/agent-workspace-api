@@ -19,7 +19,6 @@ from db import (
     create_workspace_record,
     get_or_create_user,
     get_workspace_by_user_id,
-    get_user_id_for_workspace,
     init_db,
 )
 
