@@ -11,7 +11,17 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/agent-workspace-api:latest']
 
-  # Step 4: Set env vars on the deployment (secrets injected via secretEnv)
+  # Step 4: Get GKE credentials
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - 'container'
+      - 'clusters'
+      - 'get-credentials'
+      - 'agent-workspace-cluster'
+      - '--region=us-central1'
+      - '--project=$PROJECT_ID'
+
+  # Step 5: Set env vars on the deployment (secrets injected via secretEnv)
   - name: 'gcr.io/cloud-builders/kubectl'
     entrypoint: 'bash'
     args:
@@ -26,11 +36,8 @@ steps:
           "JWT_SECRET=$$JWT_SECRET" \
           GOOGLE_CLIENT_ID=819221826816-5v3r7pgtj96l56cs3770vesaa79r9rk5.apps.googleusercontent.com
     secretEnv: ['DB_PASS', 'JWT_SECRET']
-    env:
-      - 'CLOUDSDK_COMPUTE_REGION=us-central1'
-      - 'CLOUDSDK_CONTAINER_CLUSTER=agent-workspace-cluster'
 
-  # Step 5: Restart deployment to pick up :latest image + new env vars
+  # Step 6: Restart deployment to pick up :latest image + new env vars
   - name: 'gcr.io/cloud-builders/kubectl'
     args:
       - 'rollout'
@@ -38,11 +45,8 @@ steps:
       - 'deployment/agent-workspace-api'
       - '-n'
       - 'agent-sandbox-application'
-    env:
-      - 'CLOUDSDK_COMPUTE_REGION=us-central1'
-      - 'CLOUDSDK_CONTAINER_CLUSTER=agent-workspace-cluster'
 
-  # Step 6: Check deployment status
+  # Step 7: Check deployment status
   - name: 'gcr.io/cloud-builders/kubectl'
     args:
       - 'rollout'
@@ -51,9 +55,6 @@ steps:
       - '-n'
       - 'agent-sandbox-application'
       - '--timeout=300s'
-    env:
-      - 'CLOUDSDK_COMPUTE_REGION=us-central1'
-      - 'CLOUDSDK_CONTAINER_CLUSTER=agent-workspace-cluster'
 
 options:
   logging: CLOUD_LOGGING_ONLY
