@@ -60,10 +60,10 @@ options:
 
 availableSecrets:
   secretManager:
-    - versionName: projects/819221826816/secrets/db_password/versions/latest
-      env: 'DB_PASS'
-    - versionName: projects/819221826816/secrets/jwt_secret/versions/latest
-      env: 'JWT_SECRET'
+    - versionName: "projects/819221826816/secrets/db_password/versions/latest"
+      env: "DB_PASS"
+    - versionName: "projects/819221826816/secrets/jwt_secret/versions/latest"
+      env: "JWT_SECRET"
 
 images:
   - 'gcr.io/$PROJECT_ID/agent-workspace-api:$SHORT_SHA'
