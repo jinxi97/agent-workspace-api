@@ -1,5 +1,7 @@
 import os
+import re
 import uuid
+from contextlib import asynccontextmanager
 from urllib.parse import quote
 
 from dotenv import load_dotenv
@@ -11,16 +13,17 @@ from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 from pydantic import BaseModel, Field
 
-load_dotenv()
-
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+from auth import AuthError, create_jwt, decode_jwt, verify_google_token
+from db import (
+    close_db,
+    create_workspace_record,
+    get_or_create_user,
+    get_workspace_by_user_id,
+    get_user_id_for_workspace,
+    init_db,
 )
+
+load_dotenv()
 
 SANDBOX_TEMPLATE_NAME = os.getenv("SANDBOX_TEMPLATE_NAME", "python-runtime-template")
 CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME = os.getenv("CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME", "claude-agent-sandbox-template")
@@ -29,19 +32,94 @@ SANDBOX_API_URL = os.getenv(
     "SANDBOX_API_URL",
     "http://sandbox-router-svc.agent-sandbox-application.svc.cluster.local:8080",
 )
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 SNAPSHOT_NAMESPACE = os.getenv("SNAPSHOT_NAMESPACE", SANDBOX_NAMESPACE)
-API_KEY_HEADER = os.getenv("API_KEY_HEADER", "X-API-Key")
-API_KEYS = {
-    key.strip()
-    for key in os.getenv("API_KEYS", "").split(",")
-    if key.strip()
-}
-# Static exemptions only (no env dependency). "*" means all paths are exempt.
-API_KEY_EXEMPT_PATHS = {"*"}
 
-# Store active workspaces
+# Paths that don't require JWT authentication
+AUTH_EXEMPT_PATHS = {"/", "/healthz", "/auth/google", "/openapi.json", "/docs", "/redoc"}
+# Pattern to extract workspace_id from paths like /workspaces/{uuid}/...
+WORKSPACE_PATH_PATTERN = re.compile(r"^/workspaces/([^/]+)")
+
+# Store active workspaces (in-memory cache of SandboxClient instances)
 workspaces: dict[str, SandboxClient] = {}
+
+
+CLOUD_SQL_CONNECTION_NAME = os.getenv("CLOUD_SQL_CONNECTION_NAME", "")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # If DATABASE_URL is set, use direct connection (local dev).
+    # If CLOUD_SQL_CONNECTION_NAME is set, use Cloud SQL Python Connector.
+    # If neither, skip DB init (e.g. tests with mocked DB).
+    if DATABASE_URL or CLOUD_SQL_CONNECTION_NAME:
+        await init_db(DATABASE_URL)
+    yield
+    await close_db()
+
+
+app = FastAPI(lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def _reconstruct_sandbox(claim_name: str, template_name: str) -> SandboxClient:
+    """Reconstruct a SandboxClient from a persisted claim_name."""
+    sandbox = SandboxClient(
+        template_name=template_name,
+        namespace=SANDBOX_NAMESPACE,
+        api_url=SANDBOX_API_URL,
+    )
+    sandbox.claim_name = claim_name
+    sandbox.base_url = SANDBOX_API_URL
+    return sandbox
+
+
+# ---------------------------------------------------------------------------
+# Auth middleware (replaces the old API key middleware)
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def require_auth(request: Request, call_next):
+    if request.method == "OPTIONS" or request.url.path in AUTH_EXEMPT_PATHS:
+        return await call_next(request)
+
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JSONResponse(status_code=401, content={"detail": "Missing or invalid Authorization header"})
+
+    token = auth_header[len("Bearer "):]
+    try:
+        claims = decode_jwt(token)
+    except AuthError as exc:
+        return JSONResponse(status_code=401, content={"detail": exc.message})
+
+    request.state.user_id = claims["sub"]
+    request.state.workspace_id = claims["workspace_id"]
+
+    # Check workspace ownership for /workspaces/{id}/... routes
+    match = WORKSPACE_PATH_PATTERN.match(request.url.path)
+    if match:
+        path_workspace_id = match.group(1)
+        if path_workspace_id != claims["workspace_id"]:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "You do not have access to this workspace"},
+            )
+
+    return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
+class GoogleAuthRequest(BaseModel):
+    id_token: str = Field(..., min_length=1)
 
 
 class SnapshotTriggerRequest(BaseModel):
@@ -60,6 +138,26 @@ class SnapshotRestoreRequest(BaseModel):
     )
 
 
+class ExecuteRequest(BaseModel):
+    workspace_id: str
+    command: str
+
+
+class CreateChatRequest(BaseModel):
+    title: str | None = Field(default=None, description="Optional chat title")
+
+
+class SendMessageRequest(BaseModel):
+    content: str = Field(..., min_length=1, description="Message content to send")
+
+
+class AnswerRequest(BaseModel):
+    answers: dict[str, str] = Field(..., description="Question text → selected option label")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 def _is_snapshot_ready(snapshot: dict) -> bool:
     status = snapshot.get("status", {})
     if status.get("phase") == "AllSnapshotsAvailable":
@@ -103,27 +201,57 @@ def _get_k8s_custom_api() -> client.CustomObjectsApi:
     return client.CustomObjectsApi()
 
 
-@app.middleware("http")
-async def require_api_key(request: Request, call_next):
-    if (
-        request.method == "OPTIONS"
-        or "*" in API_KEY_EXEMPT_PATHS
-        or request.url.path in API_KEY_EXEMPT_PATHS
-    ):
-        return await call_next(request)
+def _get_sandbox_or_404(workspace_id: str) -> SandboxClient:
+    sandbox = workspaces.get(workspace_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return sandbox
 
-    if not API_KEYS:
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "Server API key configuration is missing"},
+
+# ---------------------------------------------------------------------------
+# Auth endpoint
+# ---------------------------------------------------------------------------
+@app.post("/auth/google")
+async def auth_google(req: GoogleAuthRequest):
+    try:
+        google_user = verify_google_token(req.id_token)
+    except AuthError as exc:
+        raise HTTPException(status_code=401, detail=exc.message) from exc
+
+    user = await get_or_create_user(google_user["sub"], google_user["email"])
+
+    existing_ws = await get_workspace_by_user_id(user.id)
+    if existing_ws:
+        workspace_id = str(existing_ws.id)
+        # Reconnect sandbox if not in memory cache
+        if workspace_id not in workspaces:
+            sandbox = _reconstruct_sandbox(existing_ws.claim_name, existing_ws.template_name)
+            workspaces[workspace_id] = sandbox
+    else:
+        # Create a new sandbox and persist
+        workspace_id = str(uuid.uuid4())
+        sandbox = SandboxClient(
+            template_name=CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME,
+            namespace=SANDBOX_NAMESPACE,
+            api_url=SANDBOX_API_URL,
+        )
+        sandbox.__enter__()
+        workspaces[workspace_id] = sandbox
+
+        await create_workspace_record(
+            user_id=user.id,
+            workspace_id=uuid.UUID(workspace_id),
+            claim_name=sandbox.claim_name,
+            template_name=CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME,
         )
 
-    provided_key = request.headers.get(API_KEY_HEADER)
-    if not provided_key or provided_key not in API_KEYS:
-        return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+    token = create_jwt(str(user.id), workspace_id)
+    return {"workspace_id": workspace_id, "token": token}
 
-    return await call_next(request)
 
+# ---------------------------------------------------------------------------
+# Health / root
+# ---------------------------------------------------------------------------
 @app.get("/")
 async def root():
     return {"message": "Hello World!"}
@@ -134,64 +262,12 @@ async def healthz():
     return {"status": "ok"}
 
 
-@app.post("/agent-workspaces")
-def create_agent_workspace():
-    workspace_id = str(uuid.uuid4())
-    sandbox = SandboxClient(
-        template_name=CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME,
-        namespace=SANDBOX_NAMESPACE,
-        api_url=SANDBOX_API_URL,
-    )
-    sandbox.__enter__()
-
-    workspaces[workspace_id] = sandbox
-
-    return {"workspace_id": workspace_id}
-
-
-@app.post("/workspaces")
-def create_workspace():
-    # Generate a unique workspace ID
-    workspace_id = str(uuid.uuid4())
-    sandbox = SandboxClient(
-        template_name=SANDBOX_TEMPLATE_NAME,
-        namespace=SANDBOX_NAMESPACE,
-        api_url=SANDBOX_API_URL,
-    )
-    sandbox.__enter__()  # Start the sandbox
-
-    # Store reference to the sandbox
-    workspaces[workspace_id] = sandbox
-
-    return {"workspace_id": workspace_id}
-
-
-class ExecuteRequest(BaseModel):
-    """Request model for the /execute endpoint."""
-    workspace_id: str
-    command: str
-
-
-class CreateChatRequest(BaseModel):
-    """Request model for the POST /workspaces/{workspace_id}/chats endpoint."""
-    title: str | None = Field(default=None, description="Optional chat title")
-
-
-class SendMessageRequest(BaseModel):
-    """Request model for the POST /workspaces/{workspace_id}/chats/{chat_id}/messages endpoint."""
-    content: str = Field(..., min_length=1, description="Message content to send")
-
-
-class AnswerRequest(BaseModel):
-    """Request model for the POST /workspaces/{workspace_id}/chats/{chat_id}/answer endpoint."""
-    answers: dict[str, str] = Field(..., description="Question text → selected option label")
-
+# ---------------------------------------------------------------------------
+# Workspace endpoints (sandbox proxy)
+# ---------------------------------------------------------------------------
 @app.post("/execute")
 def exec_command(req: ExecuteRequest):
-    sandbox = workspaces.get(req.workspace_id)
-    if not sandbox:
-        raise HTTPException(404, "Workspace not found")
-
+    sandbox = _get_sandbox_or_404(req.workspace_id)
     result = sandbox.run(req.command)
     return {
         "stdout": result.stdout,
@@ -202,9 +278,7 @@ def exec_command(req: ExecuteRequest):
 
 @app.post("/workspaces/{workspace_id}/chats", status_code=201)
 def create_chat(workspace_id: str, req: CreateChatRequest):
-    sandbox = workspaces.get(workspace_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    sandbox = _get_sandbox_or_404(workspace_id)
 
     try:
         response = sandbox._request("POST", "api/chats", json={"title": req.title})
@@ -220,9 +294,7 @@ def create_chat(workspace_id: str, req: CreateChatRequest):
 
 @app.post("/workspaces/{workspace_id}/chats/{chat_id}/messages")
 def send_message(workspace_id: str, chat_id: str, req: SendMessageRequest):
-    sandbox = workspaces.get(workspace_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    sandbox = _get_sandbox_or_404(workspace_id)
 
     try:
         response = sandbox._request(
@@ -246,9 +318,7 @@ def send_message(workspace_id: str, chat_id: str, req: SendMessageRequest):
 
 @app.post("/workspaces/{workspace_id}/chats/{chat_id}/answer")
 def answer_question(workspace_id: str, chat_id: str, req: AnswerRequest):
-    sandbox = workspaces.get(workspace_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    sandbox = _get_sandbox_or_404(workspace_id)
 
     try:
         response = sandbox._request(
@@ -265,9 +335,7 @@ def answer_question(workspace_id: str, chat_id: str, req: AnswerRequest):
 
 @app.get("/workspaces/{workspace_id}/chats")
 def list_chats(workspace_id: str):
-    sandbox = workspaces.get(workspace_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    sandbox = _get_sandbox_or_404(workspace_id)
 
     try:
         response = sandbox._request("GET", "api/chats")
@@ -280,9 +348,7 @@ def list_chats(workspace_id: str):
 
 @app.get("/workspaces/{workspace_id}/chats/{chat_id}")
 def get_chat(workspace_id: str, chat_id: str):
-    sandbox = workspaces.get(workspace_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    sandbox = _get_sandbox_or_404(workspace_id)
 
     try:
         response = sandbox._request("GET", f"api/chats/{chat_id}")
@@ -295,9 +361,7 @@ def get_chat(workspace_id: str, chat_id: str):
 
 @app.delete("/workspaces/{workspace_id}/chats/{chat_id}")
 def delete_chat(workspace_id: str, chat_id: str):
-    sandbox = workspaces.get(workspace_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    sandbox = _get_sandbox_or_404(workspace_id)
 
     try:
         response = sandbox._request("DELETE", f"api/chats/{chat_id}")
@@ -310,9 +374,7 @@ def delete_chat(workspace_id: str, chat_id: str):
 
 @app.get("/workspaces/{workspace_id}/chats/{chat_id}/messages")
 def get_messages(workspace_id: str, chat_id: str):
-    sandbox = workspaces.get(workspace_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    sandbox = _get_sandbox_or_404(workspace_id)
 
     try:
         response = sandbox._request("GET", f"api/chats/{chat_id}/messages")
@@ -325,9 +387,7 @@ def get_messages(workspace_id: str, chat_id: str):
 
 @app.get("/workspaces/{workspace_id}/chats/{chat_id}/artifacts")
 def list_chat_artifacts(workspace_id: str, chat_id: str):
-    sandbox = workspaces.get(workspace_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    sandbox = _get_sandbox_or_404(workspace_id)
 
     try:
         response = sandbox._request("GET", f"api/chats/{chat_id}/artifacts")
@@ -340,9 +400,7 @@ def list_chat_artifacts(workspace_id: str, chat_id: str):
 
 @app.get("/workspaces/{workspace_id}/files/download/{file_path:path}")
 def download_workspace_file(workspace_id: str, file_path: str):
-    sandbox = workspaces.get(workspace_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    sandbox = _get_sandbox_or_404(workspace_id)
 
     try:
         encoded_path = quote(file_path, safe="/")
@@ -368,15 +426,16 @@ def download_workspace_file(workspace_id: str, file_path: str):
 def delete_workspace(workspace_id: str):
     sandbox = workspaces.pop(workspace_id, None)
     if sandbox:
-        sandbox.__exit__(None, None, None)  # Cleanup
+        sandbox.__exit__(None, None, None)
     return {"deleted": True}
 
 
+# ---------------------------------------------------------------------------
+# Snapshot endpoints
+# ---------------------------------------------------------------------------
 @app.post("/snapshots/triggers")
 def create_snapshot_trigger(req: SnapshotTriggerRequest):
-    sandbox = workspaces.get(req.workspace_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    sandbox = _get_sandbox_or_404(req.workspace_id)
     target_pod = sandbox.pod_name
     if not target_pod:
         raise HTTPException(
@@ -529,7 +588,6 @@ def restore_from_snapshot(req: SnapshotRestoreRequest):
             raise HTTPException(status_code=409, detail=f"sandboxclaim already exists: {claim_name}") from exc
         raise HTTPException(status_code=500, detail=f"failed to create sandboxclaim: {detail}") from exc
 
-    # Attach a workspace handle to the restored claim so callers can execute commands.
     sandbox = SandboxClient(
         template_name=SANDBOX_TEMPLATE_NAME,
         namespace=SNAPSHOT_NAMESPACE,

@@ -22,12 +22,6 @@ spec:
         env:
         - name: PORT
           value: "8080"
-        - name: API_KEY_HEADER
-          value: "X-API-Key"
-        - name: API_KEYS
-          value: "replace-with-a-strong-api-key"
-        - name: API_KEY_EXEMPT_PATHS
-          value: "/healthz,/docs,/openapi.json,/redoc"
         readinessProbe:
           httpGet:
             path: /healthz
