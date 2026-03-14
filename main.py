@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://slides-agent-client-819221826816.us-central1.run.app/"],
+    allow_origins=["http://localhost:5173", "https://slides-agent-client-819221826816.us-central1.run.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
