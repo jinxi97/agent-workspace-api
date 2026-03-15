@@ -541,6 +541,11 @@ def get_snapshot_status(
 
     trigger_status = trigger.get("status", {})
     snapshot_created = trigger_status.get("snapshotCreated")
+    if not snapshot_created:
+        return {
+            "ready": False,
+            "snapshot_name": None,
+        }
     snapshot_name = snapshot_created.get("name")
     if not snapshot_name:
         return {
