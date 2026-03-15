@@ -37,7 +37,7 @@ SNAPSHOT_NAMESPACE = os.getenv("SNAPSHOT_NAMESPACE", SANDBOX_NAMESPACE)
 
 # Paths that don't require JWT authentication
 AUTH_EXEMPT_PATHS = {"/", "/healthz", "/auth/google", "/workspace", "/execute", "/openapi.json", "/docs", "/redoc"}
-AUTH_EXEMPT_PREFIXES = ("/workspaces/",)
+AUTH_EXEMPT_PREFIXES = ("/workspaces/", "/snapshots")
 # Pattern to extract workspace_id from paths like /workspaces/{uuid}/...
 WORKSPACE_PATH_PATTERN = re.compile(r"^/workspaces/([^/]+)")
 
