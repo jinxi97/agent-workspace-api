@@ -36,7 +36,8 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 SNAPSHOT_NAMESPACE = os.getenv("SNAPSHOT_NAMESPACE", SANDBOX_NAMESPACE)
 
 # Paths that don't require JWT authentication
-AUTH_EXEMPT_PATHS = {"/", "/healthz", "/auth/google", "/openapi.json", "/docs", "/redoc"}
+AUTH_EXEMPT_PATHS = {"/", "/healthz", "/auth/google", "/workspace", "/execute", "/openapi.json", "/docs", "/redoc"}
+AUTH_EXEMPT_PREFIXES = ("/workspaces/",)
 # Pattern to extract workspace_id from paths like /workspaces/{uuid}/...
 WORKSPACE_PATH_PATTERN = re.compile(r"^/workspaces/([^/]+)")
 
@@ -89,7 +90,12 @@ def _reconstruct_sandbox(claim_name: str, template_name: str) -> SandboxClient:
 # ---------------------------------------------------------------------------
 @app.middleware("http")
 async def require_auth(request: Request, call_next):
-    if request.method == "OPTIONS" or request.url.path in AUTH_EXEMPT_PATHS:
+    path = request.url.path
+    if (
+        request.method == "OPTIONS"
+        or path in AUTH_EXEMPT_PATHS
+        or any(path.startswith(p) for p in AUTH_EXEMPT_PREFIXES)
+    ):
         return await call_next(request)
 
     auth_header = request.headers.get("Authorization")
@@ -250,6 +256,19 @@ async def auth_google(req: GoogleAuthRequest):
 
     token = create_jwt(str(user.id), workspace_id)
     return {"workspace_id": workspace_id, "token": token}
+
+
+@app.post("/workspace")
+def create_workspace():
+    workspace_id = str(uuid.uuid4())
+    sandbox = SandboxClient(
+        template_name=SANDBOX_TEMPLATE_NAME,
+        namespace=SANDBOX_NAMESPACE,
+        api_url=SANDBOX_API_URL,
+    )
+    sandbox.__enter__()
+    workspaces[workspace_id] = sandbox
+    return {"workspace_id": workspace_id}
 
 
 # ---------------------------------------------------------------------------
