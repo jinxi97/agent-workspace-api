@@ -32,10 +32,9 @@ def mock_db(monkeypatch):
     workspace.claim_name = "sandbox-claim-test"
     workspace.template_name = "claude-agent-sandbox-template"
 
-    monkeypatch.setattr("main.get_or_create_user", make_async_return(user))
-    monkeypatch.setattr("main.get_workspace_by_user_id", make_async_return(workspace))
-    monkeypatch.setattr("main.create_workspace_record", make_async_return(workspace))
-    monkeypatch.setattr("main.get_user_id_for_workspace", make_async_return(uuid.UUID(TEST_USER_ID)))
+    monkeypatch.setattr("app.routers.auth.get_or_create_user", make_async_return(user))
+    monkeypatch.setattr("app.routers.auth.get_workspace_by_user_id", make_async_return(workspace))
+    monkeypatch.setattr("app.routers.auth.create_workspace_record", make_async_return(workspace))
 
 
 def make_async_return(value):
@@ -47,12 +46,13 @@ def make_async_return(value):
 @pytest.fixture()
 def no_db_lifespan(monkeypatch):
     """Skip DB init/close in lifespan by setting DATABASE_URL to empty."""
-    monkeypatch.setattr("main.DATABASE_URL", "")
+    monkeypatch.setattr("app.config.DATABASE_URL", "")
+    monkeypatch.setattr("app.main.DATABASE_URL", "")
 
 
 @pytest.fixture()
 def client(no_db_lifespan):
-    from main import app
+    from app.main import app
     with TestClient(app) as c:
         yield c
 
@@ -99,7 +99,7 @@ class TestAuthMiddleware:
 
     def test_workspace_endpoint_with_valid_token_passes_middleware(self, client):
         """Token is valid and workspace matches — middleware passes.
-        We'll get 404 from _get_sandbox_or_404 since there's no sandbox
+        We'll get 404 from get_sandbox_or_404 since there's no sandbox
         in the in-memory cache, but the auth middleware itself passed."""
         token = _make_token()
         resp = client.get(
@@ -111,15 +111,15 @@ class TestAuthMiddleware:
 
 
 class TestAuthGoogleEndpoint:
-    @patch("main.verify_google_token")
+    @patch("app.routers.auth.verify_google_token")
     def test_new_user_creates_workspace(self, mock_verify, client, mock_db):
         mock_verify.return_value = {"sub": "google-sub-test", "email": "test@example.com"}
 
         # Patch get_workspace_by_user_id to return None (new user, no workspace)
-        with patch("main.get_workspace_by_user_id", make_async_return(None)):
+        with patch("app.routers.auth.get_workspace_by_user_id", make_async_return(None)):
             mock_sandbox = MagicMock()
             mock_sandbox.claim_name = "sandbox-claim-new"
-            with patch("main.SandboxClient", return_value=mock_sandbox):
+            with patch("app.routers.auth.SandboxClient", return_value=mock_sandbox):
                 resp = client.post("/auth/google", json={"id_token": "valid-google-token"})
 
         assert resp.status_code == 200
@@ -127,7 +127,7 @@ class TestAuthGoogleEndpoint:
         assert "workspace_id" in data
         assert "token" in data
 
-    @patch("main.verify_google_token")
+    @patch("app.routers.auth.verify_google_token")
     def test_existing_user_reuses_workspace(self, mock_verify, client, mock_db):
         mock_verify.return_value = {"sub": "google-sub-test", "email": "test@example.com"}
 
@@ -137,7 +137,7 @@ class TestAuthGoogleEndpoint:
         data = resp.json()
         assert data["workspace_id"] == TEST_WORKSPACE_ID
 
-    @patch("main.verify_google_token")
+    @patch("app.routers.auth.verify_google_token")
     def test_invalid_google_token_returns_401(self, mock_verify, client):
         from auth import AuthError
         mock_verify.side_effect = AuthError("Invalid Google token")
