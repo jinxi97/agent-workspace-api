@@ -2,7 +2,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, Text, select
+from sqlalchemy import Column, DateTime, ForeignKey, Text, UniqueConstraint, select
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
@@ -20,8 +20,28 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    google_sub = Column(Text, unique=True, nullable=False)
-    email = Column(Text, nullable=False)
+    email = Column(Text, unique=True, nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
+class AuthIdentity(Base):
+    __tablename__ = "auth_identities"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_sub", name="uq_provider_sub"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+    provider = Column(Text, nullable=False)  # "google", "github", "email", etc.
+    provider_sub = Column(Text, nullable=False)  # provider's unique user ID
     created_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -110,16 +130,34 @@ def get_session() -> AsyncSession:
     return async_session_factory()
 
 
-async def get_or_create_user(google_sub: str, email: str) -> User:
+async def get_or_create_user(provider: str, provider_sub: str, email: str) -> User:
+    """Find a user by auth identity, or create a new user + identity."""
     async with get_session() as session:
+        # Look up existing identity
         result = await session.execute(
-            select(User).where(User.google_sub == google_sub)
+            select(AuthIdentity).where(
+                AuthIdentity.provider == provider,
+                AuthIdentity.provider_sub == provider_sub,
+            )
         )
-        user = result.scalar_one_or_none()
-        if user:
-            return user
-        user = User(google_sub=google_sub, email=email)
+        identity = result.scalar_one_or_none()
+        if identity:
+            user_result = await session.execute(
+                select(User).where(User.id == identity.user_id)
+            )
+            return user_result.scalar_one()
+
+        # No identity found — create user + identity
+        user = User(email=email)
         session.add(user)
+        await session.flush()  # get user.id before creating identity
+
+        identity = AuthIdentity(
+            user_id=user.id,
+            provider=provider,
+            provider_sub=provider_sub,
+        )
+        session.add(identity)
         await session.commit()
         await session.refresh(user)
         return user

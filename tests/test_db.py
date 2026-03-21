@@ -25,9 +25,10 @@ TEST_DATABASE_URL = os.getenv(
 async def setup_db():
     """Initialize the DB and clean up tables before each test."""
     await init_db(TEST_DATABASE_URL)
-    # Clean tables in correct order (workspaces first due to FK)
+    # Clean tables in correct order (FKs first)
     async with get_session() as session:
         await session.execute(Base.metadata.tables["workspaces"].delete())
+        await session.execute(Base.metadata.tables["auth_identities"].delete())
         await session.execute(Base.metadata.tables["users"].delete())
         await session.commit()
     yield
@@ -37,17 +38,16 @@ async def setup_db():
 class TestGetOrCreateUser:
     @pytest.mark.asyncio
     async def test_new_user(self):
-        user = await get_or_create_user("google-sub-1", "alice@example.com")
+        user = await get_or_create_user("google", "google-sub-1", "alice@example.com")
 
-        assert user.google_sub == "google-sub-1"
         assert user.email == "alice@example.com"
         assert user.id is not None
         assert user.created_at is not None
 
     @pytest.mark.asyncio
     async def test_existing_user_returns_same_id(self):
-        user1 = await get_or_create_user("google-sub-2", "bob@example.com")
-        user2 = await get_or_create_user("google-sub-2", "bob@example.com")
+        user1 = await get_or_create_user("google", "google-sub-2", "bob@example.com")
+        user2 = await get_or_create_user("google", "google-sub-2", "bob@example.com")
 
         assert user1.id == user2.id
 
@@ -55,7 +55,7 @@ class TestGetOrCreateUser:
 class TestWorkspaceRecord:
     @pytest.mark.asyncio
     async def test_create_workspace(self):
-        user = await get_or_create_user("google-sub-3", "carol@example.com")
+        user = await get_or_create_user("google", "google-sub-3", "carol@example.com")
         ws_id = uuid.uuid4()
         ws = await create_workspace_record(
             user_id=user.id,
@@ -71,7 +71,7 @@ class TestWorkspaceRecord:
 
     @pytest.mark.asyncio
     async def test_get_workspace_by_user_id(self):
-        user = await get_or_create_user("google-sub-4", "dave@example.com")
+        user = await get_or_create_user("google", "google-sub-4", "dave@example.com")
         ws_id = uuid.uuid4()
         await create_workspace_record(
             user_id=user.id,
@@ -91,7 +91,7 @@ class TestWorkspaceRecord:
 
     @pytest.mark.asyncio
     async def test_get_user_id_for_workspace(self):
-        user = await get_or_create_user("google-sub-5", "eve@example.com")
+        user = await get_or_create_user("google", "google-sub-5", "eve@example.com")
         ws_id = uuid.uuid4()
         await create_workspace_record(
             user_id=user.id,

@@ -38,15 +38,16 @@ def verify_google_token(token: str) -> dict:
         raise AuthError(f"Invalid Google token: {exc}") from exc
 
 
-def create_jwt(user_id: str, workspace_id: str) -> str:
-    """Issue a JWT containing user_id and workspace_id."""
+def create_jwt(user_id: str, workspace_id: str | None = None) -> str:
+    """Issue a JWT containing user_id and optionally workspace_id."""
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
-        "workspace_id": workspace_id,
         "iat": now,
         "exp": now + timedelta(hours=JWT_EXPIRY_HOURS),
     }
+    if workspace_id is not None:
+        payload["workspace_id"] = workspace_id
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 

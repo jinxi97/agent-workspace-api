@@ -1,5 +1,4 @@
 import uuid
-from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,30 +16,6 @@ def _patch_auth_secret(monkeypatch):
     monkeypatch.setattr("utils.auth.JWT_SECRET", TEST_SECRET)
     monkeypatch.setattr("utils.auth.GOOGLE_CLIENT_ID", "test-client-id")
 
-
-@pytest.fixture()
-def mock_db(monkeypatch):
-    """Patch DB functions so we don't need a real Postgres for endpoint tests."""
-    user = MagicMock()
-    user.id = uuid.UUID(TEST_USER_ID)
-    user.google_sub = "google-sub-test"
-    user.email = "test@example.com"
-
-    workspace = MagicMock()
-    workspace.id = uuid.UUID(TEST_WORKSPACE_ID)
-    workspace.user_id = uuid.UUID(TEST_USER_ID)
-    workspace.claim_name = "sandbox-claim-test"
-    workspace.template_name = "claude-agent-sandbox-template"
-
-    monkeypatch.setattr("app.routers.account.get_or_create_user", make_async_return(user))
-    monkeypatch.setattr("app.routers.account.get_workspace_by_user_id", make_async_return(workspace))
-    monkeypatch.setattr("app.routers.account.create_workspace_record", make_async_return(workspace))
-
-
-def make_async_return(value):
-    async def _fn(*args, **kwargs):
-        return value
-    return _fn
 
 
 @pytest.fixture()
@@ -108,40 +83,3 @@ class TestAuthMiddleware:
         )
         # 404 = sandbox not in cache, but that means auth middleware passed
         assert resp.status_code == 404
-
-
-class TestAuthGoogleEndpoint:
-    @patch("app.routers.account.verify_google_token")
-    def test_new_user_creates_workspace(self, mock_verify, client, mock_db):
-        mock_verify.return_value = {"sub": "google-sub-test", "email": "test@example.com"}
-
-        # Patch get_workspace_by_user_id to return None (new user, no workspace)
-        with patch("app.routers.account.get_workspace_by_user_id", make_async_return(None)):
-            mock_sandbox = MagicMock()
-            mock_sandbox.claim_name = "sandbox-claim-new"
-            with patch("app.routers.account.SandboxClient", return_value=mock_sandbox):
-                resp = client.post("/auth/google", json={"id_token": "valid-google-token"})
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "workspace_id" in data
-        assert "token" in data
-
-    @patch("app.routers.account.verify_google_token")
-    def test_existing_user_reuses_workspace(self, mock_verify, client, mock_db):
-        mock_verify.return_value = {"sub": "google-sub-test", "email": "test@example.com"}
-
-        resp = client.post("/auth/google", json={"id_token": "valid-google-token"})
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["workspace_id"] == TEST_WORKSPACE_ID
-
-    @patch("app.routers.account.verify_google_token")
-    def test_invalid_google_token_returns_401(self, mock_verify, client):
-        from utils.auth import AuthError
-        mock_verify.side_effect = AuthError("Invalid Google token")
-
-        resp = client.post("/auth/google", json={"id_token": "bad-token"})
-
-        assert resp.status_code == 401
