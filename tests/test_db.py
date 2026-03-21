@@ -4,7 +4,7 @@ import uuid
 import pytest
 import pytest_asyncio
 
-from db import (
+from utils.db import (
     Base,
     close_db,
     create_workspace_record,

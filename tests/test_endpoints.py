@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from auth import create_jwt
+from utils.auth import create_jwt
 
 # Use a fixed secret for tests
 TEST_SECRET = "test-secret-key"
@@ -14,8 +14,8 @@ TEST_WORKSPACE_ID = str(uuid.uuid4())
 
 @pytest.fixture(autouse=True)
 def _patch_auth_secret(monkeypatch):
-    monkeypatch.setattr("auth.JWT_SECRET", TEST_SECRET)
-    monkeypatch.setattr("auth.GOOGLE_CLIENT_ID", "test-client-id")
+    monkeypatch.setattr("utils.auth.JWT_SECRET", TEST_SECRET)
+    monkeypatch.setattr("utils.auth.GOOGLE_CLIENT_ID", "test-client-id")
 
 
 @pytest.fixture()
@@ -32,9 +32,9 @@ def mock_db(monkeypatch):
     workspace.claim_name = "sandbox-claim-test"
     workspace.template_name = "claude-agent-sandbox-template"
 
-    monkeypatch.setattr("app.routers.auth.get_or_create_user", make_async_return(user))
-    monkeypatch.setattr("app.routers.auth.get_workspace_by_user_id", make_async_return(workspace))
-    monkeypatch.setattr("app.routers.auth.create_workspace_record", make_async_return(workspace))
+    monkeypatch.setattr("app.routers.account.get_or_create_user", make_async_return(user))
+    monkeypatch.setattr("app.routers.account.get_workspace_by_user_id", make_async_return(workspace))
+    monkeypatch.setattr("app.routers.account.create_workspace_record", make_async_return(workspace))
 
 
 def make_async_return(value):
@@ -111,15 +111,15 @@ class TestAuthMiddleware:
 
 
 class TestAuthGoogleEndpoint:
-    @patch("app.routers.auth.verify_google_token")
+    @patch("app.routers.account.verify_google_token")
     def test_new_user_creates_workspace(self, mock_verify, client, mock_db):
         mock_verify.return_value = {"sub": "google-sub-test", "email": "test@example.com"}
 
         # Patch get_workspace_by_user_id to return None (new user, no workspace)
-        with patch("app.routers.auth.get_workspace_by_user_id", make_async_return(None)):
+        with patch("app.routers.account.get_workspace_by_user_id", make_async_return(None)):
             mock_sandbox = MagicMock()
             mock_sandbox.claim_name = "sandbox-claim-new"
-            with patch("app.routers.auth.SandboxClient", return_value=mock_sandbox):
+            with patch("app.routers.account.SandboxClient", return_value=mock_sandbox):
                 resp = client.post("/auth/google", json={"id_token": "valid-google-token"})
 
         assert resp.status_code == 200
@@ -127,7 +127,7 @@ class TestAuthGoogleEndpoint:
         assert "workspace_id" in data
         assert "token" in data
 
-    @patch("app.routers.auth.verify_google_token")
+    @patch("app.routers.account.verify_google_token")
     def test_existing_user_reuses_workspace(self, mock_verify, client, mock_db):
         mock_verify.return_value = {"sub": "google-sub-test", "email": "test@example.com"}
 
@@ -137,9 +137,9 @@ class TestAuthGoogleEndpoint:
         data = resp.json()
         assert data["workspace_id"] == TEST_WORKSPACE_ID
 
-    @patch("app.routers.auth.verify_google_token")
+    @patch("app.routers.account.verify_google_token")
     def test_invalid_google_token_returns_401(self, mock_verify, client):
-        from auth import AuthError
+        from utils.auth import AuthError
         mock_verify.side_effect = AuthError("Invalid Google token")
 
         resp = client.post("/auth/google", json={"id_token": "bad-token"})

@@ -20,6 +20,6 @@ SNAPSHOT_STORAGE_CONFIG_NAME = os.getenv("SNAPSHOT_STORAGE_CONFIG_NAME", "cpu-ps
 
 # Paths that don't require JWT authentication
 AUTH_EXEMPT_PATHS = {"/", "/healthz", "/auth/google", "/workspace", "/execute", "/openapi.json", "/docs", "/redoc"}
-AUTH_EXEMPT_PREFIXES = ("/workspaces/", "/snapshots")
+AUTH_EXEMPT_PREFIXES = ("/snapshots",)
 # Pattern to extract workspace_id from paths like /workspaces/{uuid}/...
 WORKSPACE_PATH_PATTERN = re.compile(r"^/workspaces/([^/]+)")

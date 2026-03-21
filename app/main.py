@@ -5,8 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import CLOUD_SQL_CONNECTION_NAME, DATABASE_URL
 from app.middleware import require_auth
-from app.routers import auth, snapshots, workspaces
-from db import close_db, init_db
+from app.routers import account, snapshots, workspaces, workspaces_with_agent
+from utils.db import close_db, init_db
 
 
 @asynccontextmanager
@@ -31,8 +31,9 @@ app.add_middleware(
 )
 app.middleware("http")(require_auth)
 
-app.include_router(auth.router)
+app.include_router(account.router)
 app.include_router(workspaces.router)
+app.include_router(workspaces_with_agent.router)
 app.include_router(snapshots.router)
 
 

@@ -3,17 +3,16 @@ import uuid
 from agentic_sandbox import SandboxClient
 from fastapi import APIRouter, HTTPException
 
-from auth import AuthError, create_jwt, verify_google_token
+from utils.auth import AuthError, create_jwt, verify_google_token
 from app.config import (
     CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME,
     SANDBOX_API_URL,
     SANDBOX_NAMESPACE,
-    SANDBOX_TEMPLATE_NAME,
 )
 from app.dependencies import workspaces
-from app.schemas import GoogleAuthRequest
+from app.models.schemas import GoogleAuthRequest
 from app.services.sandbox import reconstruct_sandbox
-from db import create_workspace_record, get_or_create_user, get_workspace_by_user_id
+from utils.db import create_workspace_record, get_or_create_user, get_workspace_by_user_id
 
 router = APIRouter()
 
@@ -54,16 +53,3 @@ async def auth_google(req: GoogleAuthRequest):
 
     token = create_jwt(str(user.id), workspace_id)
     return {"workspace_id": workspace_id, "token": token}
-
-
-@router.post("/workspace")
-def create_workspace():
-    workspace_id = str(uuid.uuid4())
-    sandbox = SandboxClient(
-        template_name=SANDBOX_TEMPLATE_NAME,
-        namespace=SANDBOX_NAMESPACE,
-        api_url=SANDBOX_API_URL,
-    )
-    sandbox.__enter__()
-    workspaces[workspace_id] = sandbox
-    return {"workspace_id": workspace_id}

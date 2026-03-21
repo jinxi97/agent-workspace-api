@@ -1,7 +1,7 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from auth import AuthError, decode_jwt
+from utils.auth import AuthError, decode_jwt
 from app.config import AUTH_EXEMPT_PATHS, AUTH_EXEMPT_PREFIXES, WORKSPACE_PATH_PATTERN
 
 

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import jwt
 import pytest
 
-from auth import AuthError, JWT_ALGORITHM, create_jwt, decode_jwt, verify_google_token
+from utils.auth import AuthError, JWT_ALGORITHM, create_jwt, decode_jwt, verify_google_token
 
 # Use a fixed secret for tests
 TEST_SECRET = "test-secret-key"
@@ -12,12 +12,12 @@ TEST_SECRET = "test-secret-key"
 
 @pytest.fixture(autouse=True)
 def _set_jwt_secret(monkeypatch):
-    monkeypatch.setattr("auth.JWT_SECRET", TEST_SECRET)
-    monkeypatch.setattr("auth.GOOGLE_CLIENT_ID", "test-client-id")
+    monkeypatch.setattr("utils.auth.JWT_SECRET", TEST_SECRET)
+    monkeypatch.setattr("utils.auth.GOOGLE_CLIENT_ID", "test-client-id")
 
 
 class TestVerifyGoogleToken:
-    @patch("auth.google_id_token.verify_oauth2_token")
+    @patch("utils.auth.google_id_token.verify_oauth2_token")
     def test_valid_token(self, mock_verify):
         mock_verify.return_value = {
             "sub": "google-user-123",
@@ -30,7 +30,7 @@ class TestVerifyGoogleToken:
         assert result == {"sub": "google-user-123", "email": "user@example.com"}
         mock_verify.assert_called_once()
 
-    @patch("auth.google_id_token.verify_oauth2_token")
+    @patch("utils.auth.google_id_token.verify_oauth2_token")
     def test_invalid_token(self, mock_verify):
         mock_verify.side_effect = ValueError("Token expired")
 

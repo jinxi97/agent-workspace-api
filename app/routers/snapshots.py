@@ -6,7 +6,7 @@ from kubernetes.client.exceptions import ApiException
 
 from app.config import SANDBOX_API_URL, SANDBOX_TEMPLATE_NAME, SNAPSHOT_NAMESPACE
 from app.dependencies import get_sandbox_or_404, workspaces
-from app.schemas import SnapshotRestoreRequest, SnapshotTriggerRequest
+from app.models.schemas import SnapshotRestoreRequest, SnapshotTriggerRequest
 from app.services.k8s import (
     create_restore_template,
     ensure_snapshot_policy,
