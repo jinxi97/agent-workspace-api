@@ -216,6 +216,15 @@ async def create_api_key(user_id: uuid.UUID, name: str = "default") -> tuple[Api
         return api_key, raw_key
 
 
+async def list_api_keys(user_id: uuid.UUID) -> list[ApiKey]:
+    """Return all API keys for the given user."""
+    async with get_session() as session:
+        result = await session.execute(
+            select(ApiKey).where(ApiKey.user_id == user_id).order_by(ApiKey.created_at)
+        )
+        return list(result.scalars().all())
+
+
 async def verify_api_key(raw_key: str) -> ApiKey | None:
     """Look up an API key by its hash. Returns the record or None."""
     key_hash = _hash_api_key(raw_key)

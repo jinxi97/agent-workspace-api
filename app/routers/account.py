@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.auth import AuthError, create_jwt, verify_google_token
 from app.dependencies import require_auth
 from app.models.schemas import CreateApiKeyRequest, GoogleAuthRequest
-from utils.db import create_api_key, get_or_create_user
+from utils.db import create_api_key, get_or_create_user, list_api_keys
 
 router = APIRouter()
 
@@ -36,4 +36,20 @@ async def create_api_key_endpoint(request: Request, req: CreateApiKeyRequest):
         "key": raw_key,
         "created_at": api_key.created_at.isoformat(),
     }
+
+
+@router.get("/account/api-keys", dependencies=[Depends(require_auth)])
+async def list_api_keys_endpoint(request: Request):
+    """List all API keys for the authenticated user (masked keys only)."""
+    user_id = uuid.UUID(request.state.user_id)
+    keys = await list_api_keys(user_id)
+    return [
+        {
+            "id": str(k.id),
+            "key_masked": k.key_masked,
+            "name": k.name,
+            "created_at": k.created_at.isoformat(),
+        }
+        for k in keys
+    ]
 
