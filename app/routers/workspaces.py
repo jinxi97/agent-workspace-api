@@ -1,9 +1,7 @@
 import uuid
-from urllib.parse import quote
 
 from agentic_sandbox import SandboxClient
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
 
 from app.config import SANDBOX_API_URL, SANDBOX_NAMESPACE, SANDBOX_TEMPLATE_NAME
 from app.dependencies import get_sandbox_or_404, workspaces
@@ -34,30 +32,6 @@ def exec_command(req: ExecuteRequest):
         "stderr": result.stderr,
         "exit_code": result.exit_code,
     }
-
-
-@router.get("/workspaces/{workspace_id}/files/download/{file_path:path}")
-def download_workspace_file(workspace_id: str, file_path: str):
-    sandbox = get_sandbox_or_404(workspace_id)
-
-    try:
-        encoded_path = quote(file_path, safe="/")
-        response = sandbox._request("GET", f"api/files/download/{encoded_path}", stream=True)
-        response.raise_for_status()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error communicating with sandbox: {exc}") from exc
-
-    headers = {}
-    for header in ("content-disposition", "content-length", "last-modified", "etag"):
-        value = response.headers.get(header)
-        if value:
-            headers[header] = value
-
-    return StreamingResponse(
-        response.iter_content(chunk_size=None),
-        media_type=response.headers.get("content-type", "application/octet-stream"),
-        headers=headers,
-    )
 
 
 @router.delete("/workspaces/{workspace_id}")

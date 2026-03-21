@@ -1,19 +1,13 @@
 from agentic_sandbox import SandboxClient
 from fastapi import HTTPException, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from utils.auth import AuthError, decode_jwt
 
 # Store active workspaces (in-memory cache of SandboxClient instances)
 workspaces: dict[str, SandboxClient] = {}
 
-_bearer_scheme = HTTPBearer()
 
-
-async def require_auth(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials = None,
-) -> dict:
+async def require_auth(request: Request) -> dict:
     """FastAPI dependency that validates JWT and returns claims.
 
     Sets request.state.user_id and request.state.workspace_id as a
