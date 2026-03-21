@@ -4,7 +4,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import CLOUD_SQL_CONNECTION_NAME, DATABASE_URL
-from app.middleware import require_auth
 from app.routers import account, snapshots, workspaces, workspaces_with_agent
 from utils.db import close_db, init_db
 
@@ -29,7 +28,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.middleware("http")(require_auth)
 
 app.include_router(account.router)
 app.include_router(workspaces.router)

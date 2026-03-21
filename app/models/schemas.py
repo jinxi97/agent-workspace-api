@@ -5,6 +5,10 @@ class GoogleAuthRequest(BaseModel):
     id_token: str = Field(..., min_length=1)
 
 
+class CreateApiKeyRequest(BaseModel):
+    name: str = Field(default="default", min_length=1, max_length=64, description="A friendly name for the API key")
+
+
 class SnapshotTriggerRequest(BaseModel):
     workspace_id: str = Field(
         ...,

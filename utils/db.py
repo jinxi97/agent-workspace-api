@@ -1,4 +1,6 @@
+import hashlib
 import os
+import secrets
 import uuid
 from datetime import datetime, timezone
 
@@ -42,6 +44,25 @@ class AuthIdentity(Base):
     )
     provider = Column(Text, nullable=False)  # "google", "github", "email", etc.
     provider_sub = Column(Text, nullable=False)  # provider's unique user ID
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+    key_hash = Column(Text, unique=True, nullable=False)
+    key_masked = Column(Text, nullable=False)  # e.g. "sk-...XScA"
+    name = Column(Text, nullable=False, default="default")
     created_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -161,6 +182,48 @@ async def get_or_create_user(provider: str, provider_sub: str, email: str) -> Us
         await session.commit()
         await session.refresh(user)
         return user
+
+
+def _hash_api_key(raw_key: str) -> str:
+    """SHA-256 hash of the raw key for storage."""
+    return hashlib.sha256(raw_key.encode()).hexdigest()
+
+
+def _mask_api_key(raw_key: str) -> str:
+    """Return masked version like 'sk-...XScA'."""
+    return f"{raw_key[:3]}...{raw_key[-4:]}"
+
+
+async def create_api_key(user_id: uuid.UUID, name: str = "default") -> tuple[ApiKey, str]:
+    """Generate a new API key for the given user.
+
+    Returns (api_key_record, raw_key). The raw key is only available at
+    creation time — only the hash is persisted.
+    """
+    raw_key = f"sk-{secrets.token_urlsafe(32)}"
+    key_hash = _hash_api_key(raw_key)
+    key_masked = _mask_api_key(raw_key)
+    async with get_session() as session:
+        api_key = ApiKey(
+            user_id=user_id,
+            key_hash=key_hash,
+            key_masked=key_masked,
+            name=name,
+        )
+        session.add(api_key)
+        await session.commit()
+        await session.refresh(api_key)
+        return api_key, raw_key
+
+
+async def verify_api_key(raw_key: str) -> ApiKey | None:
+    """Look up an API key by its hash. Returns the record or None."""
+    key_hash = _hash_api_key(raw_key)
+    async with get_session() as session:
+        result = await session.execute(
+            select(ApiKey).where(ApiKey.key_hash == key_hash)
+        )
+        return result.scalar_one_or_none()
 
 
 async def create_workspace_record(

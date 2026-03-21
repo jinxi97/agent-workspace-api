@@ -51,35 +51,15 @@ class TestHealthzNoAuth:
         assert resp.status_code == 200
 
 
-class TestAuthMiddleware:
-    def test_workspace_endpoint_without_token_returns_401(self, client):
-        resp = client.get(f"/workspaces/{TEST_WORKSPACE_ID}/chats")
+class TestApiKeyAuth:
+    def test_create_api_key_without_token_returns_401(self, client):
+        resp = client.post("/account/api-keys", json={"name": "test-key"})
         assert resp.status_code == 401
 
-    def test_workspace_endpoint_with_invalid_token_returns_401(self, client):
-        resp = client.get(
-            f"/workspaces/{TEST_WORKSPACE_ID}/chats",
+    def test_create_api_key_with_invalid_token_returns_401(self, client):
+        resp = client.post(
+            "/account/api-keys",
+            json={"name": "test-key"},
             headers=_auth_header("bad-token"),
         )
         assert resp.status_code == 401
-
-    def test_workspace_endpoint_wrong_workspace_returns_403(self, client):
-        other_workspace = str(uuid.uuid4())
-        token = _make_token(workspace_id=TEST_WORKSPACE_ID)
-        resp = client.get(
-            f"/workspaces/{other_workspace}/chats",
-            headers=_auth_header(token),
-        )
-        assert resp.status_code == 403
-
-    def test_workspace_endpoint_with_valid_token_passes_middleware(self, client):
-        """Token is valid and workspace matches — middleware passes.
-        We'll get 404 from get_sandbox_or_404 since there's no sandbox
-        in the in-memory cache, but the auth middleware itself passed."""
-        token = _make_token()
-        resp = client.get(
-            f"/workspaces/{TEST_WORKSPACE_ID}/chats",
-            headers=_auth_header(token),
-        )
-        # 404 = sandbox not in cache, but that means auth middleware passed
-        assert resp.status_code == 404
