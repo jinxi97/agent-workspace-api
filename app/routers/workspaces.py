@@ -1,12 +1,13 @@
 import uuid
 
 from agentic_sandbox import SandboxClient
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.config import SANDBOX_API_URL, SANDBOX_NAMESPACE, SANDBOX_TEMPLATE_NAME
-from app.dependencies import get_sandbox_or_404, workspaces
+from app.dependencies import get_sandbox_or_404, require_api_key, workspaces
 from app.models.schemas import ExecuteRequest
 
+# router = APIRouter(dependencies=[Depends(require_api_key)])
 router = APIRouter()
 
 
