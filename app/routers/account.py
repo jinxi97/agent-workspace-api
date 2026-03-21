@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.auth import AuthError, create_jwt, verify_google_token
 from app.dependencies import require_auth
 from app.models.schemas import CreateApiKeyRequest, GoogleAuthRequest
-from utils.db import create_api_key, get_or_create_user, list_api_keys
+from utils.db import create_api_key, delete_api_key, get_or_create_user, list_api_keys
 
 router = APIRouter()
 
@@ -52,4 +52,14 @@ async def list_api_keys_endpoint(request: Request):
         }
         for k in keys
     ]
+
+
+@router.delete("/account/api-keys/{api_key_id}", dependencies=[Depends(require_auth)])
+async def delete_api_key_endpoint(request: Request, api_key_id: str):
+    """Delete an API key by ID for the authenticated user."""
+    user_id = uuid.UUID(request.state.user_id)
+    deleted = await delete_api_key(uuid.UUID(api_key_id), user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="API key not found")
+    return {"deleted": True}
 

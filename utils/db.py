@@ -225,6 +225,20 @@ async def list_api_keys(user_id: uuid.UUID) -> list[ApiKey]:
         return list(result.scalars().all())
 
 
+async def delete_api_key(api_key_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+    """Delete an API key by ID, scoped to the owning user. Returns True if deleted."""
+    async with get_session() as session:
+        result = await session.execute(
+            select(ApiKey).where(ApiKey.id == api_key_id, ApiKey.user_id == user_id)
+        )
+        api_key = result.scalar_one_or_none()
+        if not api_key:
+            return False
+        await session.delete(api_key)
+        await session.commit()
+        return True
+
+
 async def verify_api_key(raw_key: str) -> ApiKey | None:
     """Look up an API key by its hash. Returns the record or None."""
     key_hash = _hash_api_key(raw_key)
