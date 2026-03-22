@@ -24,7 +24,6 @@ class SnapshotRestoreRequest(BaseModel):
 
 
 class ExecuteRequest(BaseModel):
-    claim_name: str
     namespace: str
     pod_name: str
     command: str

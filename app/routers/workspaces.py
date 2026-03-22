@@ -6,19 +6,19 @@ from fastapi.responses import StreamingResponse
 from kubernetes.client.exceptions import ApiException
 
 
-from app.config import SANDBOX_API_URL, SANDBOX_NAMESPACE, SANDBOX_TEMPLATE_NAME
+from app.config import SANDBOX_NAMESPACE, SANDBOX_TEMPLATE_NAME
 from app.dependencies import WORKSPACE_TIMEOUT_SECONDS, create_sandbox
 from app.models.schemas import ExecuteRequest
 from app.services.k8s import get_k8s_custom_api, watch_sandbox_until_ready
 
-router = APIRouter(tags=["workspaces"])
+router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
 CLAIM_API_GROUP = "extensions.agents.x-k8s.io"
 CLAIM_API_VERSION = "v1alpha1"
 CLAIM_PLURAL = "sandboxclaims"
 
 
-@router.post("/workspace")
+@router.post("")
 def create_workspace():
     claim_name = f"workspace-claim-{os.urandom(4).hex()}"
 
@@ -56,7 +56,7 @@ def create_workspace():
     }
 
 
-@router.get("/workspace/{claim_name}/events")
+@router.get("/{claim_name}/events")
 def workspace_events(claim_name: str, namespace: str):
     """SSE stream that watches the sandbox until it becomes ready.
 
@@ -81,9 +81,9 @@ def workspace_events(claim_name: str, namespace: str):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-@router.post("/execute")
-def exec_command(req: ExecuteRequest):
-    sandbox = create_sandbox(req.claim_name, req.namespace, req.pod_name)
+@router.post("/{claim_name}/execute")
+def exec_command(claim_name: str, req: ExecuteRequest):
+    sandbox = create_sandbox(claim_name, req.namespace, req.pod_name)
     try:
         result = sandbox.run(req.command)
     except Exception as exc:
@@ -98,7 +98,7 @@ def exec_command(req: ExecuteRequest):
     }
 
 
-@router.delete("/workspace/{claim_name}")
+@router.delete("/{claim_name}")
 def delete_workspace(claim_name: str, namespace: str = SANDBOX_NAMESPACE):
     api = get_k8s_custom_api()
     try:
