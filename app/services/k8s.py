@@ -126,6 +126,38 @@ def create_restore_template(
     return restore_name
 
 
+def check_sandbox_status(
+    api: client.CustomObjectsApi,
+    claim_name: str,
+    namespace: str,
+) -> tuple[str, dict | None]:
+    """Non-blocking check of whether a Sandbox is ready.
+
+    Returns (status_str, sandbox_obj) where status_str is one of:
+      - "restoring" — sandbox not yet created or not ready
+      - "ready"     — sandbox is ready, sandbox_obj contains the resource
+    """
+    try:
+        sandbox_obj = api.get_namespaced_custom_object(
+            group="agents.x-k8s.io",
+            version="v1alpha1",
+            namespace=namespace,
+            plural="sandboxes",
+            name=claim_name,
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            return "restoring", None
+        raise
+
+    conditions = sandbox_obj.get("status", {}).get("conditions", [])
+    for cond in conditions:
+        if cond.get("type") == "Ready" and cond.get("status") == "True":
+            return "ready", sandbox_obj
+
+    return "restoring", None
+
+
 def require_snapshot_exists(api: client.CustomObjectsApi, snapshot_group: str) -> None:
     """Raise 404 if no ready snapshot exists for the given snapshot group."""
     try:
