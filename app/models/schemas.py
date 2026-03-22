@@ -10,23 +10,23 @@ class CreateApiKeyRequest(BaseModel):
 
 
 class SnapshotTriggerRequest(BaseModel):
-    workspace_id: str = Field(
-        ...,
-        min_length=1,
-        description="Workspace ID returned by POST /workspaces",
-    )
+    claim_name: str = Field(..., min_length=1)
+    namespace: str = Field(..., min_length=1)
+    pod_name: str = Field(..., min_length=1)
 
 
 class SnapshotRestoreRequest(BaseModel):
-    workspace_id: str = Field(
+    claim_name: str = Field(
         ...,
         min_length=1,
-        description="Workspace ID whose latest snapshot should be restored",
+        description="Claim name whose latest snapshot should be restored",
     )
 
 
 class ExecuteRequest(BaseModel):
-    workspace_id: str
+    claim_name: str
+    namespace: str
+    pod_name: str
     command: str
 
 

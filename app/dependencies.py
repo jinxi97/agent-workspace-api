@@ -4,9 +4,6 @@ from fastapi import HTTPException, Request
 from utils.auth import AuthError, decode_jwt
 from utils.db import verify_api_key
 
-# Store active workspaces (in-memory cache of SandboxClient instances)
-workspaces: dict[str, SandboxClient] = {}
-
 WORKSPACE_TIMEOUT_SECONDS = 300
 RESTORE_TIMEOUT_SECONDS = 300
 
@@ -45,8 +42,16 @@ async def require_api_key(request: Request) -> None:
     request.state.api_key_user_id = str(record.user_id)
 
 
-def get_sandbox_or_404(workspace_id: str) -> SandboxClient:
-    sandbox = workspaces.get(workspace_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+def create_sandbox(claim_name: str, namespace: str, pod_name: str) -> SandboxClient:
+    """Create a SandboxClient from the provided params. No caching, no I/O."""
+    from app.config import SANDBOX_API_URL
+
+    sandbox = SandboxClient(
+        template_name="",
+        namespace=namespace,
+        api_url=SANDBOX_API_URL,
+    )
+    sandbox.claim_name = claim_name
+    sandbox.sandbox_name = claim_name
+    sandbox.pod_name = pod_name
     return sandbox

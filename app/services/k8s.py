@@ -186,6 +186,24 @@ def watch_sandbox_until_ready(
     w = watch.Watch()
     logger.info("SSE watch: watching sandbox %s in %s", claim_name, namespace)
 
+    # Fail fast if the claim doesn't exist.
+    try:
+        api.get_namespaced_custom_object(
+            group="extensions.agents.x-k8s.io",
+            version="v1alpha1",
+            namespace=namespace,
+            plural="sandboxclaims",
+            name=claim_name,
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            yield _sse_event("status", {
+                "status": "failed",
+                "detail": f"Sandbox claim not found: {claim_name}",
+            })
+            return
+        raise
+
     # Send initial "creating" event immediately so the client knows the stream is alive.
     yield _sse_event("status", {"status": "creating", "claim_name": claim_name})
 

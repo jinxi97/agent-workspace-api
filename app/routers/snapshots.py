@@ -1,13 +1,12 @@
 import json
 import uuid
 
-from agentic_sandbox import SandboxClient
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from kubernetes.client.exceptions import ApiException
 
-from app.config import SANDBOX_API_URL, SANDBOX_TEMPLATE_NAME, SNAPSHOT_NAMESPACE
-from app.dependencies import RESTORE_TIMEOUT_SECONDS, get_sandbox_or_404, workspaces
+from app.config import SANDBOX_TEMPLATE_NAME, SNAPSHOT_NAMESPACE
+from app.dependencies import RESTORE_TIMEOUT_SECONDS
 from app.models.schemas import SnapshotRestoreRequest, SnapshotTriggerRequest
 from app.services.k8s import (
     create_restore_template,
@@ -24,22 +23,14 @@ router = APIRouter(prefix="/snapshots", tags=["snapshots"])
 
 @router.post("/triggers")
 def create_snapshot_trigger(req: SnapshotTriggerRequest):
-    sandbox = get_sandbox_or_404(req.workspace_id)
-    target_pod = sandbox.pod_name
-    if not target_pod:
-        raise HTTPException(
-            status_code=400,
-            detail="Workspace has no resolved pod_name yet",
-        )
+    snapshot_group = req.claim_name
 
-    snapshot_group = req.workspace_id
-
-    # 1. Label the pod with the snapshot-group (= workspace_id).
+    # 1. Label the pod with the snapshot-group (= claim_name).
     core_api = get_k8s_core_api()
     try:
         core_api.patch_namespaced_pod(
-            name=target_pod,
-            namespace=SNAPSHOT_NAMESPACE,
+            name=req.pod_name,
+            namespace=req.namespace,
             body={"metadata": {"labels": {"snapshot-group": snapshot_group}}},
         )
     except ApiException as exc:
@@ -59,7 +50,7 @@ def create_snapshot_trigger(req: SnapshotTriggerRequest):
         ) from exc
 
     # 3. Create the manual trigger.
-    trigger_name = f"{target_pod}-snapshot-{uuid.uuid4().hex[:8]}"
+    trigger_name = f"{req.pod_name}-snapshot-{uuid.uuid4().hex[:8]}"
     body = {
         "apiVersion": "podsnapshot.gke.io/v1alpha1",
         "kind": "PodSnapshotManualTrigger",
@@ -69,7 +60,7 @@ def create_snapshot_trigger(req: SnapshotTriggerRequest):
             "labels": {"snapshot-group": snapshot_group},
         },
         "spec": {
-            "targetPod": target_pod,
+            "targetPod": req.pod_name,
         },
     }
 
@@ -90,7 +81,7 @@ def create_snapshot_trigger(req: SnapshotTriggerRequest):
     return {
         "name": created["metadata"]["name"],
         "namespace": created["metadata"]["namespace"],
-        "target_pod": created.get("spec", {}).get("targetPod", target_pod),
+        "target_pod": created.get("spec", {}).get("targetPod", req.pod_name),
         "api_version": created.get("apiVersion", "podsnapshot.gke.io/v1alpha1"),
         "kind": created.get("kind", "PodSnapshotManualTrigger"),
     }
@@ -162,7 +153,7 @@ def get_snapshot_status(trigger_name: str):
 def restore_from_snapshot(req: SnapshotRestoreRequest):
     """Restore a new workspace from the latest snapshot of the given workspace."""
     api = get_k8s_custom_api()
-    snapshot_group = req.workspace_id
+    snapshot_group = req.claim_name
 
     # 0. Fail fast if no snapshot has ever been created for this workspace.
     require_snapshot_exists(api, snapshot_group)
@@ -223,29 +214,17 @@ def restore_from_snapshot(req: SnapshotRestoreRequest):
             raise HTTPException(status_code=409, detail=f"sandboxclaim already exists: {claim_name}") from exc
         raise HTTPException(status_code=500, detail=f"failed to create sandboxclaim: {detail}") from exc
 
-    # 4. Return immediately — caller uses GET /restore/{workspace_id}/events to stream status.
-    workspace_id = str(uuid.uuid4())
-
     return {
-        "workspace_id": workspace_id,
-        "status": "restoring",
         "claim_name": claim_name,
+        "status": "restoring",
         "template_name": restore_template_name,
         "namespace": SNAPSHOT_NAMESPACE,
     }
 
 
-@router.get("/restore/{workspace_id}/events")
-def restore_events(
-    workspace_id: str,
-    claim_name: str,
-    template_name: str,
-    namespace: str,
-):
+@router.get("/restore/{claim_name}/events")
+def restore_events(claim_name: str, namespace: str):
     """SSE stream that watches the restored sandbox until it becomes ready.
-
-    The client opens this connection after POST /restore, passing back
-    the claim_name, template_name, and namespace from the POST response.
 
     Events:
         event: status
@@ -257,11 +236,6 @@ def restore_events(
         event: status
         data: {"status": "failed", "detail": "..."}
     """
-    if workspace_id in workspaces:
-        def already_ready():
-            yield f"event: status\ndata: {json.dumps({'status': 'ready'})}\n\n"
-        return StreamingResponse(already_ready(), media_type="text/event-stream")
-
     def event_stream():
         for sse_chunk in watch_sandbox_until_ready(
             claim_name=claim_name,
@@ -269,24 +243,5 @@ def restore_events(
             timeout_seconds=RESTORE_TIMEOUT_SECONDS,
         ):
             yield sse_chunk
-
-            if '"status": "ready"' in sse_chunk:
-                for line in sse_chunk.strip().splitlines():
-                    if line.startswith("data: "):
-                        data = json.loads(line[6:])
-                        sandbox_info = data.get("sandbox", {})
-                        break
-
-                sandbox = SandboxClient(
-                    template_name=template_name,
-                    namespace=namespace,
-                    api_url=SANDBOX_API_URL,
-                )
-                sandbox.claim_name = claim_name
-                sandbox.sandbox_name = sandbox_info.get("sandbox_name")
-                sandbox.annotations = sandbox_info.get("annotations", {})
-                sandbox.pod_name = sandbox_info.get("pod_name", sandbox.sandbox_name)
-
-                workspaces[workspace_id] = sandbox
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
