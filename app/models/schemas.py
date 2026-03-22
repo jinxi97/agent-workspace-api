@@ -21,6 +21,7 @@ class SnapshotRestoreRequest(BaseModel):
         min_length=1,
         description="Claim name whose latest snapshot should be restored",
     )
+    namespace: str = Field(..., min_length=1)
 
 
 class ExecuteRequest(BaseModel):

@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from kubernetes import client, config, watch
 from kubernetes.client.exceptions import ApiException
 
-from app.config import SNAPSHOT_NAMESPACE, SNAPSHOT_STORAGE_CONFIG_NAME
+from app.config import SNAPSHOT_STORAGE_CONFIG_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ def get_k8s_core_api() -> client.CoreV1Api:
     return client.CoreV1Api()
 
 
-def ensure_snapshot_policy(api: client.CustomObjectsApi, snapshot_group: str) -> None:
+def ensure_snapshot_policy(api: client.CustomObjectsApi, snapshot_group: str, namespace: str) -> None:
     """Create a PodSnapshotPolicy scoped to this snapshot group (idempotent)."""
     policy_name = f"psp-{snapshot_group}"
     body = {
@@ -54,7 +54,7 @@ def ensure_snapshot_policy(api: client.CustomObjectsApi, snapshot_group: str) ->
         "kind": "PodSnapshotPolicy",
         "metadata": {
             "name": policy_name,
-            "namespace": SNAPSHOT_NAMESPACE,
+            "namespace": namespace,
         },
         "spec": {
             "storageConfigName": SNAPSHOT_STORAGE_CONFIG_NAME,
@@ -73,7 +73,7 @@ def ensure_snapshot_policy(api: client.CustomObjectsApi, snapshot_group: str) ->
         api.create_namespaced_custom_object(
             group="podsnapshot.gke.io",
             version="v1alpha1",
-            namespace=SNAPSHOT_NAMESPACE,
+            namespace=namespace,
             plural="podsnapshotpolicies",
             body=body,
         )
@@ -87,6 +87,7 @@ def create_restore_template(
     api: client.CustomObjectsApi,
     base_template_name: str,
     snapshot_group: str,
+    namespace: str,
 ) -> str:
     """Clone a SandboxTemplate with the snapshot-group label for restore.
 
@@ -95,7 +96,7 @@ def create_restore_template(
     base = api.get_namespaced_custom_object(
         group="extensions.agents.x-k8s.io",
         version="v1alpha1",
-        namespace=SNAPSHOT_NAMESPACE,
+        namespace=namespace,
         plural="sandboxtemplates",
         name=base_template_name,
     )
@@ -110,7 +111,7 @@ def create_restore_template(
         "kind": "SandboxTemplate",
         "metadata": {
             "name": restore_name,
-            "namespace": SNAPSHOT_NAMESPACE,
+            "namespace": namespace,
         },
         "spec": {
             "podTemplate": {
@@ -124,7 +125,7 @@ def create_restore_template(
         api.create_namespaced_custom_object(
             group="extensions.agents.x-k8s.io",
             version="v1alpha1",
-            namespace=SNAPSHOT_NAMESPACE,
+            namespace=namespace,
             plural="sandboxtemplates",
             body=body,
         )
@@ -263,13 +264,151 @@ def _sse_event(event_name: str, data: dict) -> str:
     return f"event: {event_name}\ndata: {json.dumps(data)}\n\n"
 
 
-def require_snapshot_exists(api: client.CustomObjectsApi, snapshot_group: str) -> None:
+def watch_snapshot_until_ready(
+    trigger_name: str,
+    namespace: str,
+    timeout_seconds: int = 300,
+) -> Generator[str, None, None]:
+    """Watch a snapshot trigger and yield SSE events until the snapshot is ready.
+
+    Two-phase watch:
+      1. Watch the PodSnapshotManualTrigger until status.snapshotCreated.name appears.
+      2. Watch the PodSnapshot until it becomes ready.
+
+    Yields SSE-formatted strings like watch_sandbox_until_ready.
+    """
+    api = get_k8s_custom_api()
+    w = watch.Watch()
+    logger.info("SSE watch: watching snapshot trigger %s in %s", trigger_name, namespace)
+
+    # Fail fast if the trigger doesn't exist.
+    try:
+        trigger = api.get_namespaced_custom_object(
+            group="podsnapshot.gke.io",
+            version="v1alpha1",
+            namespace=namespace,
+            plural="podsnapshotmanualtriggers",
+            name=trigger_name,
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            yield _sse_event("status", {
+                "status": "failed",
+                "detail": f"Snapshot trigger not found: {trigger_name}",
+            })
+            return
+        raise
+
+    yield _sse_event("status", {"status": "snapshotting", "trigger_name": trigger_name})
+
+    # Check if the trigger already has a snapshot created.
+    snapshot_name = (
+        trigger.get("status", {}).get("snapshotCreated", {}).get("name")
+    )
+
+    # Phase 1: Watch the trigger until snapshotCreated.name appears.
+    if not snapshot_name:
+        try:
+            for event in w.stream(
+                func=api.list_namespaced_custom_object,
+                namespace=namespace,
+                group="podsnapshot.gke.io",
+                version="v1alpha1",
+                plural="podsnapshotmanualtriggers",
+                field_selector=f"metadata.name={trigger_name}",
+                timeout_seconds=timeout_seconds,
+            ):
+                event_type = event.get("type")
+                if event_type not in ("ADDED", "MODIFIED"):
+                    continue
+
+                trigger_obj = event["object"]
+                snapshot_name = (
+                    trigger_obj.get("status", {}).get("snapshotCreated", {}).get("name")
+                )
+                if snapshot_name:
+                    logger.info("SSE watch: trigger %s created snapshot %s", trigger_name, snapshot_name)
+                    break
+
+                yield _sse_event("status", {"status": "snapshotting"})
+
+        except Exception:
+            logger.exception("SSE watch: error watching trigger %s", trigger_name)
+            yield _sse_event("status", {
+                "status": "failed",
+                "detail": f"Watch error for trigger {trigger_name}",
+            })
+            return
+
+    if not snapshot_name:
+        yield _sse_event("status", {
+            "status": "failed",
+            "detail": f"Trigger {trigger_name} did not produce a snapshot within {timeout_seconds}s",
+        })
+        return
+
+    # Phase 2: Watch the PodSnapshot until it's ready.
+    # First check if it's already ready.
+    try:
+        snapshot_obj = api.get_namespaced_custom_object(
+            group="podsnapshot.gke.io",
+            version="v1alpha1",
+            namespace=namespace,
+            plural="podsnapshots",
+            name=snapshot_name,
+        )
+        if is_snapshot_ready(snapshot_obj):
+            yield _sse_event("status", {"status": "ready", "snapshot_name": snapshot_name})
+            return
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
+        # Snapshot not yet created as an object — fall through to watch
+
+    w2 = watch.Watch()
+    try:
+        for event in w2.stream(
+            func=api.list_namespaced_custom_object,
+            namespace=namespace,
+            group="podsnapshot.gke.io",
+            version="v1alpha1",
+            plural="podsnapshots",
+            field_selector=f"metadata.name={snapshot_name}",
+            timeout_seconds=timeout_seconds,
+        ):
+            event_type = event.get("type")
+            if event_type not in ("ADDED", "MODIFIED"):
+                continue
+
+            snapshot_obj = event["object"]
+            if is_snapshot_ready(snapshot_obj):
+                yield _sse_event("status", {"status": "ready", "snapshot_name": snapshot_name})
+                logger.info("SSE watch: snapshot %s is ready", snapshot_name)
+                return
+
+            yield _sse_event("status", {"status": "snapshotting"})
+
+    except Exception:
+        logger.exception("SSE watch: error watching snapshot %s", snapshot_name)
+        yield _sse_event("status", {
+            "status": "failed",
+            "detail": f"Watch error for snapshot {snapshot_name}",
+        })
+        return
+
+    yield _sse_event("status", {
+        "status": "failed",
+        "detail": f"Snapshot {snapshot_name} not ready within {timeout_seconds}s",
+    })
+
+
+def require_snapshot_exists(api: client.CustomObjectsApi, snapshot_group: str, namespace: str) -> None:
     """Raise 404 if no ready snapshot exists for the given snapshot group."""
     try:
         triggers = api.list_namespaced_custom_object(
             group="podsnapshot.gke.io",
             version="v1alpha1",
-            namespace=SNAPSHOT_NAMESPACE,
+            namespace=namespace,
             plural="podsnapshotmanualtriggers",
             label_selector=f"snapshot-group={snapshot_group}",
         )
@@ -286,7 +425,7 @@ def require_snapshot_exists(api: client.CustomObjectsApi, snapshot_group: str) -
             snapshot = api.get_namespaced_custom_object(
                 group="podsnapshot.gke.io",
                 version="v1alpha1",
-                namespace=SNAPSHOT_NAMESPACE,
+                namespace=namespace,
                 plural="podsnapshots",
                 name=snapshot_name,
             )

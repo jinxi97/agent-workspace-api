@@ -5,17 +5,17 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from kubernetes.client.exceptions import ApiException
 
-from app.config import SANDBOX_TEMPLATE_NAME, SNAPSHOT_NAMESPACE
-from app.dependencies import RESTORE_TIMEOUT_SECONDS
+from app.config import SANDBOX_TEMPLATE_NAME
+from app.dependencies import RESTORE_TIMEOUT_SECONDS, SNAPSHOT_TIMEOUT_SECONDS
 from app.models.schemas import SnapshotRestoreRequest, SnapshotTriggerRequest
 from app.services.k8s import (
     create_restore_template,
     ensure_snapshot_policy,
     get_k8s_core_api,
     get_k8s_custom_api,
-    is_snapshot_ready,
     require_snapshot_exists,
     watch_sandbox_until_ready,
+    watch_snapshot_until_ready,
 )
 
 router = APIRouter(prefix="/snapshots", tags=["snapshots"])
@@ -42,7 +42,7 @@ def create_snapshot_trigger(req: SnapshotTriggerRequest):
     # 2. Create a PodSnapshotPolicy scoped to this workspace (idempotent).
     api = get_k8s_custom_api()
     try:
-        ensure_snapshot_policy(api, snapshot_group)
+        ensure_snapshot_policy(api, snapshot_group, namespace=req.namespace)
     except ApiException as exc:
         raise HTTPException(
             status_code=500,
@@ -56,7 +56,7 @@ def create_snapshot_trigger(req: SnapshotTriggerRequest):
         "kind": "PodSnapshotManualTrigger",
         "metadata": {
             "name": trigger_name,
-            "namespace": SNAPSHOT_NAMESPACE,
+            "namespace": req.namespace,
             "labels": {"snapshot-group": snapshot_group},
         },
         "spec": {
@@ -68,7 +68,7 @@ def create_snapshot_trigger(req: SnapshotTriggerRequest):
         created = api.create_namespaced_custom_object(
             group="podsnapshot.gke.io",
             version="v1alpha1",
-            namespace=SNAPSHOT_NAMESPACE,
+            namespace=req.namespace,
             plural="podsnapshotmanualtriggers",
             body=body,
         )
@@ -88,13 +88,13 @@ def create_snapshot_trigger(req: SnapshotTriggerRequest):
 
 
 @router.delete("/triggers/{trigger_name}")
-def delete_snapshot_trigger(trigger_name: str):
+def delete_snapshot_trigger(trigger_name: str, namespace: str):
     api = get_k8s_custom_api()
     try:
         api.delete_namespaced_custom_object(
             group="podsnapshot.gke.io",
             version="v1alpha1",
-            namespace=SNAPSHOT_NAMESPACE,
+            namespace=namespace,
             plural="podsnapshotmanualtriggers",
             name=trigger_name,
         )
@@ -106,47 +106,29 @@ def delete_snapshot_trigger(trigger_name: str):
     return {"deleted": True}
 
 
-@router.get("/status")
-def get_snapshot_status(trigger_name: str):
-    api = get_k8s_custom_api()
-    try:
-        trigger = api.get_namespaced_custom_object(
-            group="podsnapshot.gke.io",
-            version="v1alpha1",
-            namespace=SNAPSHOT_NAMESPACE,
-            plural="podsnapshotmanualtriggers",
-            name=trigger_name,
-        )
-    except ApiException as exc:
-        if exc.status == 404:
-            raise HTTPException(status_code=404, detail=f"Trigger not found: {trigger_name}") from exc
-        raise HTTPException(status_code=500, detail=exc.body or str(exc)) from exc
+@router.get("/triggers/{trigger_name}/events")
+def snapshot_events(trigger_name: str, namespace: str):
+    """SSE stream that watches a snapshot trigger until the snapshot is ready.
 
-    trigger_status = trigger.get("status", {})
-    snapshot_created = trigger_status.get("snapshotCreated")
-    if not snapshot_created:
-        return {"ready": False, "snapshot_name": None}
-    snapshot_name = snapshot_created.get("name")
-    if not snapshot_name:
-        return {"ready": False, "snapshot_name": None}
+    Events:
+        event: status
+        data: {"status": "snapshotting"}
 
-    try:
-        snapshot = api.get_namespaced_custom_object(
-            group="podsnapshot.gke.io",
-            version="v1alpha1",
-            namespace=SNAPSHOT_NAMESPACE,
-            plural="podsnapshots",
-            name=snapshot_name,
-        )
-    except ApiException as exc:
-        if exc.status == 404:
-            return {"ready": False, "snapshot_name": snapshot_name}
-        raise HTTPException(status_code=500, detail=exc.body or str(exc)) from exc
+        event: status
+        data: {"status": "ready", "snapshot_name": "..."}
 
-    return {
-        "ready": is_snapshot_ready(snapshot),
-        "snapshot_name": snapshot_name,
-    }
+        event: status
+        data: {"status": "failed", "detail": "..."}
+    """
+    def event_stream():
+        for sse_chunk in watch_snapshot_until_ready(
+            trigger_name=trigger_name,
+            namespace=namespace,
+            timeout_seconds=SNAPSHOT_TIMEOUT_SECONDS,
+        ):
+            yield sse_chunk
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.post("/restore")
@@ -156,11 +138,11 @@ def restore_from_snapshot(req: SnapshotRestoreRequest):
     snapshot_group = req.claim_name
 
     # 0. Fail fast if no snapshot has ever been created for this workspace.
-    require_snapshot_exists(api, snapshot_group)
+    require_snapshot_exists(api, snapshot_group, namespace=req.namespace)
 
     # 1. Ensure the snapshot-group policy exists (idempotent).
     try:
-        ensure_snapshot_policy(api, snapshot_group)
+        ensure_snapshot_policy(api, snapshot_group, namespace=req.namespace)
     except ApiException as exc:
         raise HTTPException(
             status_code=500,
@@ -173,6 +155,7 @@ def restore_from_snapshot(req: SnapshotRestoreRequest):
             api,
             base_template_name=SANDBOX_TEMPLATE_NAME,
             snapshot_group=snapshot_group,
+            namespace=req.namespace,
         )
     except ApiException as exc:
         raise HTTPException(
@@ -187,7 +170,7 @@ def restore_from_snapshot(req: SnapshotRestoreRequest):
         "kind": "SandboxClaim",
         "metadata": {
             "name": claim_name,
-            "namespace": SNAPSHOT_NAMESPACE,
+            "namespace": req.namespace,
             "labels": {
                 "app": "agent-sandbox-workload",
                 "snapshot-group": snapshot_group,
@@ -204,7 +187,7 @@ def restore_from_snapshot(req: SnapshotRestoreRequest):
         api.create_namespaced_custom_object(
             group="extensions.agents.x-k8s.io",
             version="v1alpha1",
-            namespace=SNAPSHOT_NAMESPACE,
+            namespace=req.namespace,
             plural="sandboxclaims",
             body=body,
         )
@@ -218,7 +201,7 @@ def restore_from_snapshot(req: SnapshotRestoreRequest):
         "claim_name": claim_name,
         "status": "restoring",
         "template_name": restore_template_name,
-        "namespace": SNAPSHOT_NAMESPACE,
+        "namespace": req.namespace,
     }
 
 

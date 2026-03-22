@@ -6,6 +6,7 @@ from utils.db import verify_api_key
 
 WORKSPACE_TIMEOUT_SECONDS = 300
 RESTORE_TIMEOUT_SECONDS = 300
+SNAPSHOT_TIMEOUT_SECONDS = 300
 
 
 async def require_auth(request: Request) -> dict:
