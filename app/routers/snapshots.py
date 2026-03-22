@@ -1,27 +1,22 @@
-import time
+import json
 import uuid
 
 from agentic_sandbox import SandboxClient
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from kubernetes.client.exceptions import ApiException
 
 from app.config import SANDBOX_API_URL, SANDBOX_TEMPLATE_NAME, SNAPSHOT_NAMESPACE
-from app.dependencies import (
-    RESTORE_TIMEOUT_SECONDS,
-    PendingRestore,
-    get_sandbox_or_404,
-    pending_restores,
-    workspaces,
-)
+from app.dependencies import RESTORE_TIMEOUT_SECONDS, get_sandbox_or_404, workspaces
 from app.models.schemas import SnapshotRestoreRequest, SnapshotTriggerRequest
 from app.services.k8s import (
-    check_sandbox_status,
     create_restore_template,
     ensure_snapshot_policy,
     get_k8s_core_api,
     get_k8s_custom_api,
     is_snapshot_ready,
     require_snapshot_exists,
+    watch_sandbox_until_ready,
 )
 
 router = APIRouter(prefix="/snapshots", tags=["snapshots"])
@@ -228,61 +223,70 @@ def restore_from_snapshot(req: SnapshotRestoreRequest):
             raise HTTPException(status_code=409, detail=f"sandboxclaim already exists: {claim_name}") from exc
         raise HTTPException(status_code=500, detail=f"failed to create sandboxclaim: {detail}") from exc
 
-    # 4. Return immediately — caller polls GET /restore/{workspace_id}/status.
+    # 4. Return immediately — caller uses GET /restore/{workspace_id}/events to stream status.
     workspace_id = str(uuid.uuid4())
-    pending_restores[workspace_id] = PendingRestore(
-        claim_name=claim_name,
-        template_name=restore_template_name,
-        snapshot_group=snapshot_group,
-        created_at=time.monotonic(),
-    )
 
-    return {"workspace_id": workspace_id, "status": "restoring"}
+    return {
+        "workspace_id": workspace_id,
+        "status": "restoring",
+        "claim_name": claim_name,
+        "template_name": restore_template_name,
+        "namespace": SNAPSHOT_NAMESPACE,
+    }
 
 
-@router.get("/restore/{workspace_id}/status")
-def get_restore_status(workspace_id: str):
-    """Poll for restore readiness. Returns status: restoring | ready | failed."""
-    # Already finalized in a previous poll?
+@router.get("/restore/{workspace_id}/events")
+def restore_events(
+    workspace_id: str,
+    claim_name: str,
+    template_name: str,
+    namespace: str,
+):
+    """SSE stream that watches the restored sandbox until it becomes ready.
+
+    The client opens this connection after POST /restore, passing back
+    the claim_name, template_name, and namespace from the POST response.
+
+    Events:
+        event: status
+        data: {"status": "restoring"}
+
+        event: status
+        data: {"status": "ready", "sandbox": {...}}
+
+        event: status
+        data: {"status": "failed", "detail": "..."}
+    """
     if workspace_id in workspaces:
-        return {"workspace_id": workspace_id, "status": "ready"}
+        def already_ready():
+            yield f"event: status\ndata: {json.dumps({'status': 'ready'})}\n\n"
+        return StreamingResponse(already_ready(), media_type="text/event-stream")
 
-    pending = pending_restores.get(workspace_id)
-    if not pending:
-        raise HTTPException(status_code=404, detail="No pending restore found")
+    def event_stream():
+        for sse_chunk in watch_sandbox_until_ready(
+            claim_name=claim_name,
+            namespace=namespace,
+            timeout_seconds=RESTORE_TIMEOUT_SECONDS,
+        ):
+            yield sse_chunk
 
-    # Timeout check.
-    elapsed = time.monotonic() - pending.created_at
-    if elapsed > RESTORE_TIMEOUT_SECONDS:
-        pending_restores.pop(workspace_id, None)
-        return {
-            "workspace_id": workspace_id,
-            "status": "failed",
-            "detail": f"Restore timed out after {RESTORE_TIMEOUT_SECONDS}s",
-        }
+            if '"status": "ready"' in sse_chunk:
+                for line in sse_chunk.strip().splitlines():
+                    if line.startswith("data: "):
+                        data = json.loads(line[6:])
+                        sandbox_info = data.get("sandbox", {})
+                        break
 
-    # Non-blocking K8s check.
-    api = get_k8s_custom_api()
-    status_str, sandbox_obj = check_sandbox_status(
-        api, pending.claim_name, SNAPSHOT_NAMESPACE,
-    )
+                sandbox = SandboxClient(
+                    template_name=template_name,
+                    namespace=namespace,
+                    api_url=SANDBOX_API_URL,
+                )
+                sandbox.claim_name = claim_name
+                sandbox.sandbox_name = sandbox_info.get("sandbox_name")
+                sandbox.annotations = sandbox_info.get("annotations", {})
+                sandbox.pod_name = sandbox_info.get("pod_name", sandbox.sandbox_name)
 
-    if status_str == "ready":
-        # Finalize the SandboxClient and move to workspaces.
-        sandbox = SandboxClient(
-            template_name=pending.template_name,
-            namespace=SNAPSHOT_NAMESPACE,
-            api_url=SANDBOX_API_URL,
-        )
-        sandbox.claim_name = pending.claim_name
-        metadata = sandbox_obj.get("metadata", {})
-        sandbox.sandbox_name = metadata.get("name")
-        sandbox.annotations = metadata.get("annotations", {})
-        sandbox.pod_name = sandbox.annotations.get(
-            "agents.x-k8s.io/pod-name", sandbox.sandbox_name,
-        )
+                workspaces[workspace_id] = sandbox
 
-        workspaces[workspace_id] = sandbox
-        pending_restores.pop(workspace_id, None)
-
-    return {"workspace_id": workspace_id, "status": status_str}
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

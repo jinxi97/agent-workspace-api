@@ -1,10 +1,20 @@
+import json
+import logging
 import uuid
+from collections.abc import Generator
 
 from fastapi import HTTPException
-from kubernetes import client, config
+from kubernetes import client, config, watch
 from kubernetes.client.exceptions import ApiException
 
 from app.config import SNAPSHOT_NAMESPACE, SNAPSHOT_STORAGE_CONFIG_NAME
+
+logger = logging.getLogger(__name__)
+
+SANDBOX_API_GROUP = "agents.x-k8s.io"
+SANDBOX_API_VERSION = "v1alpha1"
+SANDBOX_PLURAL = "sandboxes"
+POD_NAME_ANNOTATION = "agents.x-k8s.io/pod-name"
 
 
 def is_snapshot_ready(snapshot: dict) -> bool:
@@ -156,6 +166,83 @@ def check_sandbox_status(
             return "ready", sandbox_obj
 
     return "restoring", None
+
+
+def watch_sandbox_until_ready(
+    claim_name: str,
+    namespace: str,
+    timeout_seconds: int = 300,
+) -> Generator[str, None, None]:
+    """Watch a Sandbox resource and yield SSE-formatted events until ready or timeout.
+
+    Yields strings in SSE format:
+        event: status\ndata: {"status": "creating", ...}\n\n
+        event: status\ndata: {"status": "ready", "sandbox": {...}}\n\n
+
+    The "sandbox" field in the "ready" event contains metadata needed to
+    finalize the SandboxClient (sandbox_name, pod_name, annotations).
+    """
+    api = get_k8s_custom_api()
+    w = watch.Watch()
+    logger.info("SSE watch: watching sandbox %s in %s", claim_name, namespace)
+
+    # Send initial "creating" event immediately so the client knows the stream is alive.
+    yield _sse_event("status", {"status": "creating", "claim_name": claim_name})
+
+    try:
+        for event in w.stream(
+            func=api.list_namespaced_custom_object,
+            namespace=namespace,
+            group=SANDBOX_API_GROUP,
+            version=SANDBOX_API_VERSION,
+            plural=SANDBOX_PLURAL,
+            field_selector=f"metadata.name={claim_name}",
+            timeout_seconds=timeout_seconds,
+        ):
+            event_type = event.get("type")
+            if event_type not in ("ADDED", "MODIFIED"):
+                continue
+
+            sandbox_obj = event["object"]
+            conditions = sandbox_obj.get("status", {}).get("conditions", [])
+            is_ready = any(
+                c.get("type") == "Ready" and c.get("status") == "True"
+                for c in conditions
+            )
+
+            if is_ready:
+                metadata = sandbox_obj.get("metadata", {})
+                annotations = metadata.get("annotations", {})
+                sandbox_info = {
+                    "sandbox_name": metadata.get("name"),
+                    "pod_name": annotations.get(POD_NAME_ANNOTATION, metadata.get("name")),
+                    "annotations": annotations,
+                }
+                yield _sse_event("status", {"status": "ready", "sandbox": sandbox_info})
+                logger.info("SSE watch: sandbox %s is ready", claim_name)
+                return
+
+            # Still creating — send a heartbeat so the client knows we're alive.
+            yield _sse_event("status", {"status": "creating"})
+
+    except Exception:
+        logger.exception("SSE watch: error watching sandbox %s", claim_name)
+        yield _sse_event("status", {
+            "status": "failed",
+            "detail": f"Watch error for sandbox {claim_name}",
+        })
+        return
+
+    # If we get here, the watch timed out without becoming ready.
+    yield _sse_event("status", {
+        "status": "failed",
+        "detail": f"Sandbox {claim_name} not ready within {timeout_seconds}s",
+    })
+
+
+def _sse_event(event_name: str, data: dict) -> str:
+    """Format a dict as an SSE event string."""
+    return f"event: {event_name}\ndata: {json.dumps(data)}\n\n"
 
 
 def require_snapshot_exists(api: client.CustomObjectsApi, snapshot_group: str) -> None:
