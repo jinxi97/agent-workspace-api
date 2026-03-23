@@ -13,7 +13,6 @@ from app.services.k8s import (
     ensure_snapshot_policy,
     get_k8s_core_api,
     get_k8s_custom_api,
-    require_snapshot_exists,
     watch_sandbox_until_ready,
     watch_snapshot_until_ready,
 )
@@ -137,25 +136,16 @@ def restore_from_snapshot(req: SnapshotRestoreRequest):
     api = get_k8s_custom_api()
     snapshot_group = req.claim_name
 
-    # 0. Fail fast if no snapshot has ever been created for this workspace.
-    require_snapshot_exists(api, snapshot_group, namespace=req.namespace)
+    snapshot_name = req.snapshot_name
 
-    # 1. Ensure the snapshot-group policy exists (idempotent).
-    try:
-        ensure_snapshot_policy(api, snapshot_group, namespace=req.namespace)
-    except ApiException as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to ensure snapshot policy: {exc.body or str(exc)}",
-        ) from exc
-
-    # 2. Create a dynamic SandboxTemplate for restore.
+    # 1. Create a dynamic SandboxTemplate with the restore annotation.
     try:
         restore_template_name = create_restore_template(
             api,
             base_template_name=SANDBOX_TEMPLATE_NAME,
             snapshot_group=snapshot_group,
             namespace=req.namespace,
+            snapshot_name=snapshot_name,
         )
     except ApiException as exc:
         raise HTTPException(

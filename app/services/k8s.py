@@ -83,13 +83,66 @@ def ensure_snapshot_policy(api: client.CustomObjectsApi, snapshot_group: str, na
         raise
 
 
+def find_latest_ready_snapshot(
+    api: client.CustomObjectsApi,
+    snapshot_group: str,
+    namespace: str,
+) -> str:
+    """Return the name of the latest ready PodSnapshot for the given group.
+
+    Raises HTTPException(404) if none is found.
+    """
+    triggers = api.list_namespaced_custom_object(
+        group="podsnapshot.gke.io",
+        version="v1alpha1",
+        namespace=namespace,
+        plural="podsnapshotmanualtriggers",
+        label_selector=f"snapshot-group={snapshot_group}",
+    )
+    best_name: str | None = None
+    best_time: str = ""
+    for trigger in triggers.get("items", []):
+        snap_name = (
+            trigger.get("status", {}).get("snapshotCreated", {}).get("name")
+        )
+        if not snap_name:
+            continue
+        try:
+            snap = api.get_namespaced_custom_object(
+                group="podsnapshot.gke.io",
+                version="v1alpha1",
+                namespace=namespace,
+                plural="podsnapshots",
+                name=snap_name,
+            )
+        except ApiException:
+            continue
+        if not is_snapshot_ready(snap):
+            continue
+        created = snap.get("metadata", {}).get("creationTimestamp", "")
+        if created > best_time:
+            best_time = created
+            best_name = snap_name
+
+    if not best_name:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No ready snapshot found for workspace: {snapshot_group}",
+        )
+    return best_name
+
+
 def create_restore_template(
     api: client.CustomObjectsApi,
     base_template_name: str,
     snapshot_group: str,
     namespace: str,
+    snapshot_name: str,
 ) -> str:
-    """Clone a SandboxTemplate with the snapshot-group label for restore.
+    """Clone a SandboxTemplate with the snapshot-group label and restore annotation.
+
+    Each restore creates a unique template so that the ``podsnapshot.gke.io/ps-name``
+    annotation points to the correct snapshot.
 
     Returns the name of the newly created template.
     """
@@ -101,10 +154,14 @@ def create_restore_template(
         name=base_template_name,
     )
 
-    restore_name = f"restore-{snapshot_group}"
+    restore_name = f"restore-{snapshot_group}-{uuid.uuid4().hex[:8]}"
     pod_template = base.get("spec", {}).get("podTemplate", {})
     pod_meta = pod_template.get("metadata", {})
     labels = {**(pod_meta.get("labels", {})), "snapshot-group": snapshot_group}
+    annotations = {
+        **(pod_meta.get("annotations", {})),
+        "podsnapshot.gke.io/ps-name": snapshot_name,
+    }
 
     body = {
         "apiVersion": "extensions.agents.x-k8s.io/v1alpha1",
@@ -115,24 +172,19 @@ def create_restore_template(
         },
         "spec": {
             "podTemplate": {
-                "metadata": {"labels": labels},
+                "metadata": {"labels": labels, "annotations": annotations},
                 "spec": pod_template.get("spec", {}),
             },
         },
     }
 
-    try:
-        api.create_namespaced_custom_object(
-            group="extensions.agents.x-k8s.io",
-            version="v1alpha1",
-            namespace=namespace,
-            plural="sandboxtemplates",
-            body=body,
-        )
-    except ApiException as exc:
-        if exc.status != 409:
-            raise
-        # Already exists — fine for repeated restores from the same group
+    api.create_namespaced_custom_object(
+        group="extensions.agents.x-k8s.io",
+        version="v1alpha1",
+        namespace=namespace,
+        plural="sandboxtemplates",
+        body=body,
+    )
 
     return restore_name
 

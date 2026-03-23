@@ -19,9 +19,14 @@ class SnapshotRestoreRequest(BaseModel):
     claim_name: str = Field(
         ...,
         min_length=1,
-        description="Claim name whose latest snapshot should be restored",
+        description="Original workspace claim name (used as snapshot group)",
     )
     namespace: str = Field(..., min_length=1)
+    snapshot_name: str = Field(
+        ...,
+        min_length=1,
+        description="Name of the PodSnapshot to restore from",
+    )
 
 
 class ExecuteRequest(BaseModel):
