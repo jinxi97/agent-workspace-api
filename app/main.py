@@ -20,6 +20,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "http://localhost:5173",
         "http://localhost:8000",
         "https://slides-agent-client-819221826816.us-central1.run.app",
         "https://funky.dev",
