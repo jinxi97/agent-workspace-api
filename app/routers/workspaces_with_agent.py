@@ -1,13 +1,15 @@
 import os
+import uuid
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from kubernetes.client.exceptions import ApiException
 
 from app.config import CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME, SANDBOX_NAMESPACE
-from app.dependencies import create_sandbox
+from app.dependencies import create_sandbox, require_auth
 from app.models.schemas import AnswerRequest, CreateChatRequest, SendMessageRequest
 from app.services.k8s import get_k8s_custom_api
+from utils.db import create_workspace_record, get_workspace_by_user_id
 
 router = APIRouter()
 
@@ -16,9 +18,24 @@ CLAIM_API_VERSION = "v1alpha1"
 CLAIM_PLURAL = "sandboxclaims"
 
 
-@router.post("/workspaces-with-agent", status_code=201)
-def create_workspace_with_agent():
-    """Create a workspace using the agent sandbox template."""
+@router.post("/workspaces-with-agent", status_code=201, dependencies=[Depends(require_auth)])
+async def create_workspace_with_agent(request: Request):
+    """Create a workspace using the agent sandbox template.
+
+    If the authenticated user already owns a workspace, return it instead
+    of creating a new one.
+    """
+    user_id = uuid.UUID(request.state.user_id)
+
+    existing = await get_workspace_by_user_id(user_id)
+    if existing:
+        return {
+            "claim_name": existing.claim_name,
+            "template_name": existing.template_name,
+            "namespace": SANDBOX_NAMESPACE,
+            "status": "exists",
+        }
+
     claim_name = f"agent-workspace-claim-{os.urandom(4).hex()}"
 
     body = {
@@ -46,6 +63,14 @@ def create_workspace_with_agent():
         if exc.status == 409:
             raise HTTPException(status_code=409, detail=f"Claim already exists: {claim_name}") from exc
         raise HTTPException(status_code=500, detail=f"Failed to create sandbox claim: {detail}") from exc
+
+    workspace_id = uuid.uuid4()
+    await create_workspace_record(
+        user_id=user_id,
+        workspace_id=workspace_id,
+        claim_name=claim_name,
+        template_name=CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME,
+    )
 
     return {
         "claim_name": claim_name,
@@ -132,3 +157,22 @@ def get_messages(claim_name: str, chat_id: str, namespace: str = Query(...), pod
 def list_chat_artifacts(claim_name: str, chat_id: str, namespace: str = Query(...), pod_name: str = Query(...)):
     sandbox = create_sandbox(claim_name, namespace, pod_name)
     return _sandbox_proxy(sandbox, "GET", f"api/chats/{chat_id}/artifacts")
+
+
+@router.get("/workspaces/{claim_name}/files/download/{file_path:path}")
+def download_file(claim_name: str, file_path: str, namespace: str = Query(...), pod_name: str = Query(...)):
+    sandbox = create_sandbox(claim_name, namespace, pod_name)
+    try:
+        response = sandbox._request("GET", f"api/files/download/{file_path}", stream=True)
+        response.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error communicating with sandbox: {exc}",
+        ) from exc
+
+    content_type = response.headers.get("content-type", "application/octet-stream")
+    return StreamingResponse(
+        response.iter_content(chunk_size=None),
+        media_type=content_type,
+    )
