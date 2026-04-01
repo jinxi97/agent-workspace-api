@@ -20,9 +20,8 @@ def _patch_auth_secret(monkeypatch):
 
 @pytest.fixture()
 def no_db_lifespan(monkeypatch):
-    """Skip DB init/close in lifespan by setting DATABASE_URL to empty."""
-    monkeypatch.setattr("app.config.DATABASE_URL", "")
-    monkeypatch.setattr("app.main.DATABASE_URL", "")
+    """Skip DB init/close in lifespan by setting CLOUD_SQL_CONNECTION_NAME to empty."""
+    monkeypatch.setattr("app.config.CLOUD_SQL_CONNECTION_NAME", "")
 
 
 @pytest.fixture()

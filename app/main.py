@@ -3,15 +3,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import CLOUD_SQL_CONNECTION_NAME, DATABASE_URL
+from app.config import CLOUD_SQL_CONNECTION_NAME
 from app.routers import account, snapshots, workspaces, workspaces_with_agent
 from utils.db import close_db, init_db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if DATABASE_URL or CLOUD_SQL_CONNECTION_NAME:
-        await init_db(DATABASE_URL)
+    if CLOUD_SQL_CONNECTION_NAME:
+        await init_db()
     yield
     await close_db()
 

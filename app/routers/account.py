@@ -22,6 +22,20 @@ async def create_or_get_account(req: GoogleAuthRequest):
     user = await get_or_create_user("google", google_user["sub"], google_user["email"])
     token = create_jwt(str(user.id))
 
+    return {"user_id": str(user.id), "token": token}
+
+# TODO: This is a temporary endpoint to create a workspace for the user. Mostly for demo.
+@router.post("/account-with-workspace")
+async def create_or_get_account_with_workspace(req: GoogleAuthRequest):
+    """Verify Google id_token, create or get user, return JWT."""
+    try:
+        google_user = verify_google_token(req.id_token)
+    except AuthError as exc:
+        raise HTTPException(status_code=401, detail=exc.message) from exc
+
+    user = await get_or_create_user("google", google_user["sub"], google_user["email"])
+    token = create_jwt(str(user.id))
+
     workspace = await get_workspace_by_user_id(user.id)
     workspace_data = None
     if workspace:

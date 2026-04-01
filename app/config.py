@@ -11,7 +11,6 @@ SANDBOX_API_URL = os.getenv(
     "SANDBOX_API_URL",
     "http://sandbox-router-svc.agent-sandbox-application.svc.cluster.local:8080",
 )
-DATABASE_URL = os.getenv("DATABASE_URL", "")
 CLOUD_SQL_CONNECTION_NAME = os.getenv("CLOUD_SQL_CONNECTION_NAME", "")
 
 SNAPSHOT_NAMESPACE = os.getenv("SNAPSHOT_NAMESPACE", SANDBOX_NAMESPACE)

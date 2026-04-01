@@ -19,8 +19,7 @@ def _patch_auth_secret(monkeypatch):
 
 @pytest.fixture()
 def no_db_lifespan(monkeypatch):
-    monkeypatch.setattr("app.config.DATABASE_URL", "")
-    monkeypatch.setattr("app.main.DATABASE_URL", "")
+    monkeypatch.setattr("app.config.CLOUD_SQL_CONNECTION_NAME", "")
 
 
 @pytest.fixture()

@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -13,6 +13,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "agentic-sandbox" },
     { name = "asyncpg" },
+    { name = "certifi" },
     { name = "cloud-sql-python-connector", extra = ["asyncpg"] },
     { name = "fastapi", extra = ["standard"] },
     { name = "google-auth" },
@@ -32,6 +33,7 @@ dev = [
 requires-dist = [
     { name = "agentic-sandbox", git = "https://github.com/kubernetes-sigs/agent-sandbox.git?subdirectory=clients%2Fpython%2Fagentic-sandbox-client&rev=v0.1.1" },
     { name = "asyncpg", specifier = ">=0.29.0" },
+    { name = "certifi", specifier = ">=2026.1.4" },
     { name = "cloud-sql-python-connector", extras = ["asyncpg"], specifier = ">=1.0.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.129.0" },
     { name = "google-auth", specifier = ">=2.0.0" },
