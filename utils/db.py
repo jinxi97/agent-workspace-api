@@ -77,11 +77,11 @@ class Workspace(Base):
     user_id = Column(
         UUID(as_uuid=True),
         ForeignKey("users.id"),
-        unique=True,
         nullable=False,
     )
     claim_name = Column(Text, nullable=False)
     template_name = Column(Text, nullable=False)
+    pod_name = Column(Text, nullable=True)
     created_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -268,12 +268,53 @@ async def create_workspace_record(
         return workspace
 
 
-async def get_workspace_by_user_id(user_id: uuid.UUID) -> Workspace | None:
+async def get_workspaces_by_user_id(user_id: uuid.UUID) -> list[Workspace]:
     async with get_session() as session:
         result = await session.execute(
-            select(Workspace).where(Workspace.user_id == user_id)
+            select(Workspace).where(Workspace.user_id == user_id).order_by(Workspace.created_at)
         )
-        return result.scalar_one_or_none()
+        return list(result.scalars().all())
+
+
+async def update_workspace_pod_name(claim_name: str, pod_name: str) -> None:
+    """Cache the pod name for a workspace."""
+    async with get_session() as session:
+        result = await session.execute(
+            select(Workspace).where(Workspace.claim_name == claim_name)
+        )
+        workspace = result.scalar_one_or_none()
+        if workspace:
+            workspace.pod_name = pod_name
+            await session.commit()
+
+
+async def verify_workspace_ownership(user_id: uuid.UUID, claim_name: str) -> bool:
+    """Return True if the given user owns the workspace with this claim_name."""
+    async with get_session() as session:
+        result = await session.execute(
+            select(Workspace).where(
+                Workspace.user_id == user_id,
+                Workspace.claim_name == claim_name,
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
+
+async def delete_workspace_record(user_id: uuid.UUID, claim_name: str) -> bool:
+    """Delete a workspace by claim_name, scoped to the owning user. Returns True if deleted."""
+    async with get_session() as session:
+        result = await session.execute(
+            select(Workspace).where(
+                Workspace.user_id == user_id,
+                Workspace.claim_name == claim_name,
+            )
+        )
+        workspace = result.scalar_one_or_none()
+        if not workspace:
+            return False
+        await session.delete(workspace)
+        await session.commit()
+        return True
 
 
 async def get_user_id_for_workspace(workspace_id: str) -> uuid.UUID | None:

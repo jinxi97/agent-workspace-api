@@ -189,6 +189,47 @@ def create_restore_template(
     return restore_name
 
 
+def get_sandbox_status(claim_name: str, namespace: str, pod_name: str | None = None) -> tuple[str, str | None]:
+    """Return the Pod phase and pod_name for a sandbox claim.
+
+    If pod_name is provided (cached), skips the Sandbox lookup.
+    Returns (status, pod_name) — pod_name may be discovered on first call.
+
+    Possible status values: "Not Found", "Creating", "Pending", "Running",
+    "Succeeded", "Failed", "Deleted", "Unknown".
+    """
+    # If pod_name not cached, look it up from the Sandbox resource
+    if not pod_name:
+        api = get_k8s_custom_api()
+        try:
+            sandbox_obj = api.get_namespaced_custom_object(
+                group=SANDBOX_API_GROUP,
+                version=SANDBOX_API_VERSION,
+                namespace=namespace,
+                plural=SANDBOX_PLURAL,
+                name=claim_name,
+            )
+        except ApiException as exc:
+            if exc.status == 404:
+                return "Not Found", None
+            return "Unknown", None
+
+        metadata = sandbox_obj.get("metadata", {})
+        pod_name = metadata.get("annotations", {}).get(POD_NAME_ANNOTATION, metadata.get("name"))
+        if not pod_name:
+            return "Creating", None
+
+    # Pod is the source of truth
+    core_api = get_k8s_core_api()
+    try:
+        pod = core_api.read_namespaced_pod(name=pod_name, namespace=namespace)
+        return pod.status.phase or "Unknown", pod_name
+    except ApiException as exc:
+        if exc.status == 404:
+            return "Deleted", pod_name
+        return "Unknown", pod_name
+
+
 def check_sandbox_status(
     api: client.CustomObjectsApi,
     claim_name: str,

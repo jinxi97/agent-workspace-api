@@ -1,8 +1,12 @@
 from agentic_sandbox import SandboxClient
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request, Security
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
 from utils.auth import AuthError, decode_jwt
 from utils.db import verify_api_key
+
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+_bearer_scheme = HTTPBearer(auto_error=False)
 
 WORKSPACE_TIMEOUT_SECONDS = 300
 RESTORE_TIMEOUT_SECONDS = 300
@@ -30,9 +34,11 @@ async def require_auth(request: Request) -> dict:
     return claims
 
 
-async def require_api_key(request: Request) -> None:
+async def require_api_key(
+    request: Request,
+    api_key: str | None = Security(_api_key_header),
+) -> None:
     """FastAPI dependency that validates an API key from the X-API-Key header."""
-    api_key = request.headers.get("X-API-Key")
     if not api_key:
         raise HTTPException(status_code=401, detail="Missing X-API-Key header")
 
@@ -41,6 +47,34 @@ async def require_api_key(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     request.state.api_key_user_id = str(record.user_id)
+
+
+async def require_any_auth(
+    request: Request,
+    api_key: str | None = Security(_api_key_header),
+    bearer: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
+) -> None:
+    """FastAPI dependency that accepts either JWT (Bearer) or API key (X-API-Key).
+
+    Sets request.state.user_id as a string regardless of which method is used.
+    """
+
+    if api_key:
+        record = await verify_api_key(api_key)
+        if not record:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        request.state.user_id = str(record.user_id)
+        return
+
+    if bearer:
+        try:
+            claims = decode_jwt(bearer.credentials)
+        except AuthError as exc:
+            raise HTTPException(status_code=401, detail=exc.message) from exc
+        request.state.user_id = claims["sub"]
+        return
+
+    raise HTTPException(status_code=401, detail="Missing authentication: provide X-API-Key or Authorization header")
 
 
 def create_sandbox(claim_name: str, namespace: str, pod_name: str) -> SandboxClient:

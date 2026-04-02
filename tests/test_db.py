@@ -11,7 +11,7 @@ from utils.db import (
     get_or_create_user,
     get_session,
     get_user_id_for_workspace,
-    get_workspace_by_user_id,
+    get_workspaces_by_user_id,
     init_db,
 )
 
@@ -70,7 +70,7 @@ class TestWorkspaceRecord:
         assert ws.template_name == "python-runtime-template"
 
     @pytest.mark.asyncio
-    async def test_get_workspace_by_user_id(self):
+    async def test_get_workspaces_by_user_id(self):
         user = await get_or_create_user("google", "google-sub-4", "dave@example.com")
         ws_id = uuid.uuid4()
         await create_workspace_record(
@@ -80,13 +80,13 @@ class TestWorkspaceRecord:
             template_name="test-template",
         )
 
-        found = await get_workspace_by_user_id(user.id)
+        found = await get_workspaces_by_user_id(user.id)
         assert found is not None
         assert found.id == ws_id
 
     @pytest.mark.asyncio
-    async def test_get_workspace_by_user_id_none(self):
-        result = await get_workspace_by_user_id(uuid.uuid4())
+    async def test_get_workspaces_by_user_id_none(self):
+        result = await get_workspaces_by_user_id(uuid.uuid4())
         assert result is None
 
     @pytest.mark.asyncio

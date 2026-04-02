@@ -6,7 +6,7 @@ from utils.auth import AuthError, create_jwt, verify_google_token
 from app.config import SANDBOX_NAMESPACE
 from app.dependencies import require_auth
 from app.models.schemas import CreateApiKeyRequest, GoogleAuthRequest
-from utils.db import create_api_key, delete_api_key, get_or_create_user, get_workspace_by_user_id, list_api_keys
+from utils.db import create_api_key, delete_api_key, get_or_create_user, get_workspaces_by_user_id, list_api_keys
 
 router = APIRouter()
 
@@ -36,16 +36,17 @@ async def create_or_get_account_with_workspace(req: GoogleAuthRequest):
     user = await get_or_create_user("google", google_user["sub"], google_user["email"])
     token = create_jwt(str(user.id))
 
-    workspace = await get_workspace_by_user_id(user.id)
-    workspace_data = None
-    if workspace:
-        workspace_data = {
-            "claim_name": workspace.claim_name,
-            "template_name": workspace.template_name,
+    workspaces = await get_workspaces_by_user_id(user.id)
+    workspace_data = [
+        {
+            "claim_name": ws.claim_name,
+            "template_name": ws.template_name,
             "namespace": SANDBOX_NAMESPACE,
         }
+        for ws in workspaces
+    ]
 
-    return {"user_id": str(user.id), "token": token, "workspace": workspace_data}
+    return {"user_id": str(user.id), "token": token, "workspaces": workspace_data}
 
 
 @router.post("/account/api-keys", status_code=201, dependencies=[Depends(require_auth)])

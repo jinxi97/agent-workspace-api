@@ -9,7 +9,7 @@ from app.config import CLAUDE_AGENT_SANDBOX_TEMPLATE_NAME, SANDBOX_NAMESPACE
 from app.dependencies import create_sandbox, require_auth
 from app.models.schemas import AnswerRequest, CreateChatRequest, SendMessageRequest
 from app.services.k8s import get_k8s_custom_api
-from utils.db import create_workspace_record, get_workspace_by_user_id
+from utils.db import create_workspace_record, get_workspaces_by_user_id
 
 router = APIRouter()
 
@@ -27,7 +27,7 @@ async def create_workspace_with_agent(request: Request):
     """
     user_id = uuid.UUID(request.state.user_id)
 
-    existing = await get_workspace_by_user_id(user_id)
+    existing = await get_workspaces_by_user_id(user_id)
     if existing:
         return {
             "claim_name": existing.claim_name,
